@@ -19,3 +19,7 @@ config/secret.json
 _gist*/
 
 debug.log
+#
+private/
+# work directory
+
