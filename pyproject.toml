@@ -7,6 +7,7 @@ requires-python = ">=3.14"
 dependencies = [
     "pathlib>=1.0.1",
     "requests>=2.32.5",
+    "yklibpy",
 ]
 
 [dependency-groups]
@@ -17,12 +18,15 @@ dev = [
 [project.scripts]
 gistx  = "gistx.x:mainx"
 x = "gistx.x:mainx"
-
-[tool.uv.sources]
-yklibpy = { path = "../yklibpy" }
+check = "gistx.x:check"
+check2 = "gistx.x:check2"
+check3 = "gistx.x:check3"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/gistx", "src"]
 
 [tool.uv]
 package = true
+
+[tool.uv.sources]
+yklibpy = { path = "../yklibpy" }
