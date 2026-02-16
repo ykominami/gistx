@@ -6,7 +6,8 @@ import requests
 from yklibpy.common.util import Util
 from yklibpy.common.util_yaml import UtilYaml
 
-from .gistinfo import GistInfo
+from gistx.gistinfo import GistInfo
+from gistx.cli import Cli
 
 
 class Gistx:
@@ -88,7 +89,10 @@ class Gistx:
 
         while True:
             res = session.get(self.url, params={"per_page": per_page, "page": page})
-            res.raise_for_status()
+            #  res.raise_for_status()
+            if res.status_code != 200:
+                print(f"Error: {res.status_code}")
+                break
 
             batch = res.json()
             if not batch:
@@ -262,4 +266,94 @@ class Gistx:
                 return
 
     def output_gist_info(self, gist_info_assoc: dict, yaml_file: Path):
-        Util.save_yaml(gist_info_assoc, yaml_file)
+        UtilYaml.save_yaml(gist_info_assoc, yaml_file)
+
+    def clone_my_public_gists(self, flag: bool = True):
+        """
+        GitHubの自分のpublic gistをすべて取得して clone する
+        """
+        self.gist_info_assoc = self.get_gist_info_assoc()
+        self.get_gist_content_with_assoc(self.gist_info_assoc, self.dest_dir_path, flag)
+
+        return self.gist_info_assoc
+
+    def check_gist_info_3(self):
+        gist_info_assoc = self.clone_my_public_gists(False)
+
+        # name_alnumの値で分類
+        for gist_id, gist_info in gist_info_assoc.items():
+            dir_name = gist_info.dir_name
+            if len(dir_name) < 2:
+                print(f'gist_id={gist_id} | dir_name={dir_name}')
+
+    def check_gist_info_2(self):
+        gist_info_assoc = self.clone_my_public_gists(False)
+
+        # name_alnumの値で分類
+        classified = {}
+        for gist_id, gist_info in gist_info_assoc.items():
+            clone_url = gist_info.clone_url
+            if clone_url is None or clone_url == "":
+                print(f'gist_id={gist_id} | clone_url={clone_url}')
+                classified[gist_id] = gist_info
+                for key, value in vars(gist_info).items():
+                    print(f'{key}={value}')
+                print('========')
+
+        return classified
+
+    def check_gist_info(self):
+        gist_info_assoc = self.clone_my_public_gists(False)
+
+        # name_alnumの値で分類
+        classified = {}
+        for gist_id, gist_info in gist_info_assoc.items():
+            name_alnum = gist_info.name_alnum
+            if name_alnum not in classified.keys():
+                classified[name_alnum] = []
+            classified[name_alnum].append(gist_info)
+
+        # print(classified)
+        sorted_classified_keys = sorted(classified.keys())
+        for name_alnum in sorted_classified_keys:
+            gist_infos = classified[name_alnum]
+            length = len(gist_infos)
+            if length > 1:
+                print(f"{name_alnum}: {length}")
+                for i in range(length):
+                    if name_alnum == "":
+                        dir_name = f"_none/{i}"
+                    else:
+                        dir_name = f"{name_alnum}-{i}"
+                    gist_info = gist_infos[i]
+                    print(f" {dir_name} {gist_info.title}")
+
+        return classified
+
+
+username = "ykominami"
+output_top_dir = "./_output"
+output_dir = Path(output_top_dir) / "gist_9"
+dest_dir = output_dir
+
+def mainx():
+    args = Cli().get_args()
+    username = args.user
+    output_top_dir = args.output
+    output_dir = Path(output_top_dir) / "gist_9"
+    dest_dir = output_dir
+
+    gistx = Gistx(username, dest_dir)
+    gistx.clone_my_public_gists()
+
+def check3():
+    gistx = Gistx(username, dest_dir)
+    gistx.check_gist_info_3()
+
+def check2():
+    gistx = Gistx(username, dest_dir)
+    gistx.check_gist_info_2()
+
+def check():
+    gistx = Gistx(username, dest_dir)
+    gistx.check_gist_info()

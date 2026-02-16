@@ -5,6 +5,7 @@ description = "clone all my gist to local PC."
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
+    "mypy>=1.19.1",
     "pathlib>=1.0.1",
     "requests>=2.32.5",
     "yklibpy",
@@ -16,11 +17,11 @@ dev = [
     "ty>=0.0.11",
 ]
 [project.scripts]
-gistx  = "gistx.x:mainx"
-x = "gistx.x:mainx"
-check = "gistx.x:check"
-check2 = "gistx.x:check2"
-check3 = "gistx.x:check3"
+gistx  = "gistx.gistx:mainx"
+x = "gistx.gistx:mainx"
+check = "gistx.gistx:check"
+check2 = "gistx.gistx:check2"
+check3 = "gistx.gistx:check3"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/gistx", "src"]

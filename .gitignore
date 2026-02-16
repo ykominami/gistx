@@ -23,3 +23,13 @@ debug.log
 private/
 # work directory
 
+/_input/
+/_output/
+/_private/
+/_gist_7/
+/.mypy_cache/
+/.ruff_cache/
+/.venv/
+/dist/
+*.code-workspace
+.cursor/
