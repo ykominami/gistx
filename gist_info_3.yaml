@@ -1,3 +1,33 @@
+532e68d2e0358d13b818d2d71963032a: !!python/object:gistx.gistinfo.GistInfo
+  gist_id: 532e68d2e0358d13b818d2d71963032a
+  name: '[Linux] 現在の推奨コマンド #linux'
+  title: Linux
+  title_parts:
+  - Linux
+  name_without_japanese: '[Linux]  #linux'
+  name_alnum: Linuxlinux
+  clone_url: https://gist.github.com/532e68d2e0358d13b818d2d71963032a.git
+  dir_name: Linuxlinux
+652220825145b8cfeee4225e2299a165: !!python/object:gistx.gistinfo.GistInfo
+  gist_id: 652220825145b8cfeee4225e2299a165
+  name: '[uv-mise] uvコマンド、pyproject.md'
+  title: uv-mise
+  title_parts:
+  - uv-mise
+  name_without_japanese: '[uv-mise] uvpyproject.md'
+  name_alnum: uvmiseuvpyprojectmd
+  clone_url: https://gist.github.com/652220825145b8cfeee4225e2299a165.git
+  dir_name: uvmiseuvpyprojectmd
+8311f40f13df03c9d14c98e210a9ecc3: !!python/object:gistx.gistinfo.GistInfo
+  gist_id: 8311f40f13df03c9d14c98e210a9ecc3
+  name: '[uv-add] uv add'
+  title: uv-add
+  title_parts:
+  - uv-add
+  name_without_japanese: '[uv-add] uv add'
+  name_alnum: uvadduvadd
+  clone_url: https://gist.github.com/8311f40f13df03c9d14c98e210a9ecc3.git
+  dir_name: uvadduvadd
 7ae050a8cb162283fbcecf87b1e5bc28: !!python/object:gistx.gistinfo.GistInfo
   gist_id: 7ae050a8cb162283fbcecf87b1e5bc28
   name: '[python|forループの使い方] forループの使い方'
@@ -21,13 +51,14 @@
   dir_name: gitgitgit
 362859eafe707d3ede10d8799e9c51fc: !!python/object:gistx.gistinfo.GistInfo
   gist_id: 362859eafe707d3ede10d8799e9c51fc
-  name: curl https://mise.run | sh
-  title: ''
-  title_parts: []
-  name_without_japanese: curl https://mise.run | sh
-  name_alnum: curlhttpsmiserunsh
+  name: '[INSTALL] install-mise-grok'
+  title: INSTALL
+  title_parts:
+  - INSTALL
+  name_without_japanese: '[INSTALL] install-mise-grok'
+  name_alnum: INSTALLinstallmisegrok
   clone_url: https://gist.github.com/362859eafe707d3ede10d8799e9c51fc.git
-  dir_name: curlhttpsmiserunsh
+  dir_name: INSTALLinstallmisegrok
 c4c45930c5b39f9e350181f2cbe17fca: !!python/object:gistx.gistinfo.GistInfo
   gist_id: c4c45930c5b39f9e350181f2cbe17fca
   name: '[MCPwin|sqlite] #mcp #filesystem'
