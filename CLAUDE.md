@@ -4,104 +4,98 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-`gistx` is a Python CLI tool that clones all public GitHub Gists from a specified user to a local directory. It fetches gist metadata via the GitHub API, processes descriptions to extract titles, handles naming conflicts, and clones repositories using git.
+`gistx` is a Python CLI tool that clones all public/private GitHub Gists from a configured user to a local directory. It fetches gist metadata via the GitHub API, processes descriptions to extract titles, handles naming conflicts, and clones repositories using git.
 
 ## Commands
 
 ### Installation and Setup
 ```bash
-# Install dependencies (uses uv package manager)
 uv sync
-
-# Install in development mode
 uv pip install -e .
+```
+
+### First-time Configuration
+```bash
+# Interactive setup: detects GitHub user via `gh` CLI and writes config
+gistx setup
 ```
 
 ### Running the Tool
 ```bash
-# Main command - clones all gists for configured user
-gistx
-# or
-x
+# Clone public gists
+gistx clone --public
 
-# Check for gists with duplicate name_alnum values
-check
+# Clone private gists
+gistx clone --private
 
-# Check for gists with missing clone_url
-check2
+# Clone all gists
+gistx clone --all
 
-# Check for gists with short directory names (< 2 chars)
-check3
+# Limit number of repos, verbose output, force refresh of cached list
+gistx clone --public --max_repos 10 -v -f
 ```
 
-### Linting
+### Type Checking and Linting
 ```bash
-# Run ruff linter
 uv run ruff check src/
+uv run mypy src/
 ```
 
 ## Architecture
 
-### Entry Points
+### Entry Points (`pyproject.toml`)
 
-The package defines multiple entry points in `pyproject.toml`:
-- `gistx` and `x`: Main clone operation (src/gistx/x.py:mainx)
-- `check`, `check2`, `check3`: Diagnostic utilities (src/gistx/x.py)
+- `gistx` / `x`: `gistx.gistx:mainx` — main CLI dispatcher
+- `tomlx`: `gistx.tomlx:main` — TOML utility
+- `check`, `check2`, `check3`: `gistx.gistx:check*` — diagnostic stubs (not yet implemented)
 
-Configuration (username and dest_dir) is currently hardcoded in `x.py`.
+### CLI Flow
+
+`mainx()` → `Clix` (subcommand router) → `Gistx.setup()` or `Gistx.clone()`
+
+**`Clix`** (`clix.py`) builds argparse subcommands: `setup`, `clone`, `check`. Each subcommand dispatches to a method on `Gistx`.
 
 ### Core Components
 
-**Gistx class** (`src/gistx/gistx.py`)
-- Main orchestrator for fetching and cloning gists
-- Handles GitHub API pagination (100 gists per page)
-- Manages YAML caching of gist metadata in `gist_info_3.yaml`
-- Registers custom YAML constructors for GistInfo serialization
+**`Gistx`** (`gistx.py`) — top-level orchestrator
+- Initializes `AppStore` (from `yklibpy`) to manage config/DB files and directories
+- `setup` subcommand: runs `CommandSetup` which detects `gh` user and writes config
+- `clone` subcommand: validates flags, registers YAML constructors once (class-level flag), then delegates to `CommandClone`
 
-**GistInfo class** (`src/gistx/gistinfo.py`)
-- Data model for gist metadata
-- Key fields:
-  - `gist_id`: GitHub gist ID
-  - `name`: Original description from GitHub
-  - `title`: Extracted from `[title]` pattern in description
-  - `name_alnum`: Alphanumeric-only version (used for directory naming)
-  - `clone_url`: Git clone URL
-  - `dir_name`: Final local directory name
+**`AppConfigx`** (`appconfigx.py`) — extends `yklibpy.AppConfig`
+- Declares two DB keys: `list` (YAML file of cached `GistInfo` objects) and `repo` (directory for cloned gists)
+- Config key `user` stores the GitHub username
 
-**clone_my_public_gists** (`src/gistx/main.py`)
-- Public API function
-- Workflow:
-  1. Fetch or load gist metadata
-  2. Classify gists by name_alnum
-  3. Handle naming conflicts by appending `-{index}` suffix
-  4. Clone each gist to appropriate directory
+**`CommandSetup`** (`command_setup.py`) — writes initial config and empty DB files via `AppStore`
 
-### Data Flow
+**`CommandClone`** (`command_clone.py`) — main clone logic
+- Fetches gists from `https://api.github.com/users/{user}/gists` with pagination (100/page)
+- Caches result as YAML via `AppStore`; uses cache on subsequent runs unless `--force`
+- Separates public/private gists; clones into a versioned directory tree:
+  `{repo_dir}/{top_dir}/{fetch_count}/{public|private}/{dir_name}`
+- Uses `FetchCount` (from `yklibpy`) to manage versioned fetch directories
 
-1. **Fetch**: GitHub API → raw gist JSON (with pagination)
-2. **Transform**: Extract/sanitize names → GistInfo objects → YAML cache
-3. **Classify**: Group by name_alnum, detect duplicates
-4. **Clone**: Execute `git clone` for each gist to `dest_dir/dir_name`
+**`GistInfo`** (`gistinfo.py`) — data model for a single gist
+- Key derived fields: `title` (from `[title]` in description), `name_without_japanese` (CJK stripped), `name_alnum` (alphanumeric only, used as directory name)
 
-### Naming Convention
+### Naming Convention for Clone Directories
 
-Directory names are derived from gist descriptions:
-- Descriptions with `[title]` extract the title
-- Japanese characters are removed to create `name_without_japanese`
-- Only alphanumeric chars are kept to create `name_alnum`
-- Gists with duplicate `name_alnum` get `-0`, `-1`, `-2` suffixes
-- Gists with empty `name_alnum` go to `_none/0`, `_none/1`, etc.
+1. Description with `[title]` pattern → extracts title
+2. CJK characters stripped → `name_without_japanese`
+3. Non-alphanumeric stripped → `name_alnum` (used as `dir_name`)
+4. Duplicate `name_alnum`: appended with `-0`, `-1`, `-2`, ...
+5. Empty `name_alnum`: stored under `_none/0`, `_none/1`, ...
+6. Gists with no description or all-Japanese descriptions are skipped
+
+### Key Behaviors
+
+- YAML cache (`AppConfigx.BASE_NAME_LIST`) prevents redundant API calls; bypassed with `--force`
+- Already-cloned directories are skipped (no pull/update)
+- YAML constructors for `GistInfo` deserialization are registered once via a class-level flag `Gistx._constructors_registered`
+- `clone_my_all_gists` currently has an `exit()` call mid-function (line ~137 of `command_clone.py`) — the code below it is unreachable; this is in-progress work
 
 ### Dependencies
 
-- **requests**: GitHub API communication
-- **yklibpy**: Local utility library at `../yklibpy` (YAML handling, file utilities)
-- **pathlib**: Path manipulation
-- **subprocess**: Git clone operations
-
-### Important Notes
-
-- The tool skips gists without descriptions or where Japanese removal results in empty strings
-- YAML cache prevents redundant API calls on subsequent runs
-- Already-cloned directories are skipped (no updates/pulls)
-- Custom YAML constructors must be registered once for GistInfo deserialization
+- **requests**: GitHub API calls
+- **yklibpy** (`../yklibpy`, editable): `AppStore`, `AppConfig`, `Loggerx`, `Timex`, `FetchCount`, `Command`, `UtilYaml`, `Cli`, `Tomlop`
+- **mypy** + **ty** (dev): static type checking; `yklibpy.*` imports are set to `follow_imports = "skip"`

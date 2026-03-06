@@ -22,7 +22,7 @@ ignore_missing_imports = true
 
 [project.scripts]
 gistx = "gistx.gistx:mainx"
-tomlx = "gistx.tomlx:main"
+initx = "gistx.initx:main"
 x = "gistx.gistx:mainx"
 check = "gistx.gistx:check"
 check2 = "gistx.gistx:check2"
