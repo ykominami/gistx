@@ -36,9 +36,7 @@ class Gistx:
         print(f"args={args}")
         if args.verbose:
             Loggerx._set_log_level(logging.DEBUG)
-            print(f"verbose=True")
         else:
-            print(f"verbose=False")
             Loggerx._set_log_level(logging.INFO)
 
         repo_kind = None
