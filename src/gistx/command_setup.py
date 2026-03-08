@@ -12,7 +12,7 @@ class CommandSetup(Command):
   def run(self) -> None:
     user = CommandGhUser().run()
     if Util.is_empty(user):
-      user = AppConfigx.DEFAULT_VALUE_USER
+      user = CommandGhUser.DEFAULT_VALUE_USER
     print(f"user={user}")
     data = {
       AppConfigx.KEY_USER: user,

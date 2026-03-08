@@ -23,6 +23,7 @@ class Gistx:
         appstore.prepare_config_file()
         appstore.prepare_db_file()
         appstore.prepare_db_directory()
+
         return appstore
 
     @classmethod
@@ -33,10 +34,12 @@ class Gistx:
 
     @classmethod
     def clone(cls, args: argparse.Namespace) -> None:
-        print(f"args={args}")
+        Loggerx.debug(f"args={args}", __name__)
         if args.verbose:
             Loggerx._set_log_level(logging.DEBUG)
+            Loggerx.debug(f"verbose=True", __name__)
         else:
+            Loggerx.debug(f"verbose=False", __name__)
             Loggerx._set_log_level(logging.INFO)
 
         repo_kind = None
@@ -93,8 +96,11 @@ class Gistx:
     def fix(cls, args: argparse.Namespace) -> None:
         if args.verbose:
             Loggerx._set_log_level(logging.DEBUG)
+            Loggerx.debug(f"verbose=True", __name__)
         else:
             Loggerx._set_log_level(logging.INFO)
+            Loggerx.debug(f"verbose=False", __name__)
+
         appstore = cls.init_appstore()
         appstore.load_file_all()
         CommandFix(appstore).run(args)
