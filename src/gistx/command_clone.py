@@ -15,6 +15,18 @@ from yklibpy.common.loggerx import Loggerx
 from gistx.appconfigx import AppConfigx
 from gistx.gistinfo import GistInfo
 
+
+class PublicAndPrivateGistInfoAssoc(NamedTuple):
+    public_gist_info_assoc: dict[str, GistInfo]
+    private_gist_info_assoc: dict[str, GistInfo]
+
+
+class PathAndPublicAndPrivateGistInfoAssoc(NamedTuple):
+    path: Path
+    repo_limit: int
+    public_and_privat_gist_info_assoc: PublicAndPrivateGistInfoAssoc
+
+
 class CommandClone(Command):
     REPO_KIND_PUBLIC = "public"
     REPO_KIND_PRIVATE = "private"
@@ -76,10 +88,6 @@ class CommandClone(Command):
     def is_valid_next_top_dir_path(self, next_top_dir_path: Path) -> bool:
         return next_top_dir_path.exists()
 
-    class PublicAndPrivateGistInfoAssoc(NamedTuple):
-        public_gist_info_assoc: dict[str, GistInfo]
-        private_gist_info_assoc: dict[str, GistInfo]
-
     def get_public_and_private_gist_info_assoc(self, gist_info_assoc: dict[str, GistInfo]) -> PublicAndPrivateGistInfoAssoc:
         public_gist_info_assoc = {}
         private_gist_info_assoc = {}
@@ -88,20 +96,13 @@ class CommandClone(Command):
                 public_gist_info_assoc[k] = v
             else:
                 private_gist_info_assoc[k] = v
-        return self.PublicAndPrivateGistInfoAssoc(public_gist_info_assoc, private_gist_info_assoc)
+        return PublicAndPrivateGistInfoAssoc(public_gist_info_assoc, private_gist_info_assoc)
 
-    def clone_my_all_gists(
-        self, max_repos: int, repo_kind: str) -> bool:
-        """
-        GitHubの自分のpublic gistをすべて取得して clone する
-        """
-
-        Loggerx.debug(f"clone_my_all_gists | max_repos={max_repos}", __name__)
+    def prepare_clone_dir_path(self, max_repos: int, repo_kind: str) -> PathAndPublicAndPrivateGistInfoAssoc:
+        Loggerx.debug(f"prepare_clone_dir_path | max_repos={max_repos} | repo_kind={repo_kind}", __name__)
         [self.gist_info_assoc, count_of_all_repo] = self.get_gist_info_assoc(max_repos)
 
         publicAndPrivateGistInfoAssoc = self.get_public_and_private_gist_info_assoc(self.gist_info_assoc)
-        public_gist_info_assoc = publicAndPrivateGistInfoAssoc.public_gist_info_assoc
-        private_gist_info_assoc = publicAndPrivateGistInfoAssoc.private_gist_info_assoc
 
         repo_limit = count_of_all_repo
 
@@ -120,13 +121,6 @@ class CommandClone(Command):
         else:
             dir_level2 = self.fetchcount_value
 
-        Loggerx.debug(f"dir_level1={dir_level1}", __name__)
-        Loggerx.debug(f"dir_level2={dir_level2}", __name__)
-        Loggerx.debug(f"sorted_dir_list_level2={sorted_dir_list_level2}", __name__)
-        Loggerx.debug(f"self.fetchcount_value={self.fetchcount_value}", __name__)
-        Loggerx.debug(f"self.fetchcount.needness_of_refresh={self.fetchcount.needness_of_refresh}", __name__)
-        Loggerx.debug(f"self.fetchcount.needness_of_top_dir={self.fetchcount.needness_of_top_dir}", __name__)
-
         assert next_top_dir_path is not None
 
         if self.fetchcount.needness_of_refresh:
@@ -138,21 +132,46 @@ class CommandClone(Command):
             if dir_level2 != self.fetchcount_value:
                 raise ValueError(f"fetchcount_value={self.fetchcount_value} does not exist")
 
-        fetch_dir_path = next_top_dir_path / str(self.fetchcount_value)
-        Loggerx.debug(f"CommandClone 2 fetch_dir_path={fetch_dir_path}", __name__)
-        fetch_dir_path.mkdir(parents=True, exist_ok=True)
+        clone_dir_path = next_top_dir_path / str(self.fetchcount_value)
+        Loggerx.debug(f"CommandClone 2 clone_dir_path={clone_dir_path}", __name__)
+        clone_dir_path.mkdir(parents=True, exist_ok=True)
 
-        Loggerx.debug(f"fetch_dir_path={fetch_dir_path}", __name__)
-        if repo_kind == self.REPO_KIND_PUBLIC or repo_kind == self.REPO_KIND_ALL:
-            public_dest_dir_path = fetch_dir_path / self.REPO_KIND_PUBLIC
-            collected_public_gist_info_assoc = self.get_gist_content_with_assoc(public_gist_info_assoc, public_dest_dir_path, repo_limit)
-            repo_limit -= len(list(collected_public_gist_info_assoc.keys()))
-        if repo_kind == self.REPO_KIND_PRIVATE or repo_kind == self.REPO_KIND_ALL:
-            private_dest_dir_path = fetch_dir_path / self.REPO_KIND_PRIVATE
-            collected_private_gist_info_assoc = self.get_gist_content_with_assoc(private_gist_info_assoc, private_dest_dir_path, repo_limit)
-            repo_limit -= len(list(collected_private_gist_info_assoc.keys()))
+        return PathAndPublicAndPrivateGistInfoAssoc(clone_dir_path, repo_limit, publicAndPrivateGistInfoAssoc)
 
+    def clone_my_all_gists(
+        self, max_repos: int, repo_kind: str) -> bool:
+        """
+        GitHubの自分のpublic gistをすべて取得して clone する
+        """
+        pathAndPublicAndPrivateGistInfoAssoc = self.prepare_clone_dir_path(max_repos, repo_kind)        
+
+        clone_dir_path = pathAndPublicAndPrivateGistInfoAssoc.path
+        repo_limit = pathAndPublicAndPrivateGistInfoAssoc.repo_limit
+        public_gist_info_assoc = pathAndPublicAndPrivateGistInfoAssoc.public_and_privat_gist_info_assoc.public_gist_info_assoc
+        private_gist_info_assoc = pathAndPublicAndPrivateGistInfoAssoc.public_and_privat_gist_info_assoc.private_gist_info_assoc
+
+        Loggerx.debug(f"clone_dir_path={clone_dir_path}", __name__)
+        Loggerx.debug(f"public_gist_info_assoc={public_gist_info_assoc}", __name__)
+        Loggerx.debug(f"private_gist_info_assoc={private_gist_info_assoc}", __name__)
+
+        if repo_kind == self.REPO_KIND_PUBLIC:
+            repo_limit = self.clone_with_repo_kind(clone_dir_path, public_gist_info_assoc, self.REPO_KIND_PUBLIC, repo_limit)
+        elif repo_kind == self.REPO_KIND_PRIVATE:
+            repo_limit = self.clone_with_repo_kind(clone_dir_path, private_gist_info_assoc, self.REPO_KIND_PRIVATE, repo_limit)
+        elif repo_kind == self.REPO_KIND_ALL:
+            repo_limit = self.clone_with_repo_kind(clone_dir_path, public_gist_info_assoc, self.REPO_KIND_PUBLIC, repo_limit)
+            repo_limit = self.clone_with_repo_kind(clone_dir_path, private_gist_info_assoc, self.REPO_KIND_PRIVATE, repo_limit)
+        else:
+            raise ValueError(f"Invalid repo_kind: {repo_kind}")
+        
         return True
+
+    def clone_with_repo_kind(self, clone_dir_path: Path, gist_info_assoc: dict[str, GistInfo], repo_kind: str, repo_limit: int) -> int:
+        dest_dir_path = clone_dir_path / repo_kind
+        dest_dir_path.mkdir(parents=True, exist_ok=True)
+        collected_gist_info_assoc = self.get_gist_content_with_assoc(gist_info_assoc, dest_dir_path, repo_limit)
+        repo_limit -= len(list(collected_gist_info_assoc.keys()))
+        return repo_limit
 
     def is_valid_gist_info_assoc(self, gist_info_assoc) -> bool:
         Loggerx.debug(f"is_valid_gist_info_assoc | gist_info_assoc={gist_info_assoc}", __name__)
