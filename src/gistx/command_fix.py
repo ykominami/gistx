@@ -29,6 +29,7 @@ class CommandFix(Command):
     def _remove_empty_dirs(self, path: Path) -> int:
         removed = 0
         for dirpath_str, dirnames, filenames in os.walk(str(path), topdown=False):
+            # print(f"### dirpath_str={dirpath_str}, dirnames={dirnames}, filenames={filenames}")
             dirpath = Path(dirpath_str)
             if dirpath == path:
                 continue

@@ -119,7 +119,7 @@ class CommandClone(Command):
         if len(sorted_dir_list_level2) > 0:
             dir_level2 = sorted_dir_list_level2[0]
         else:
-            dir_level2 = self.fetchcount_value
+            dir_level2 = None
 
         assert next_top_dir_path is not None
 

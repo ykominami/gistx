@@ -18,4 +18,3 @@ class AppConfigx(AppConfig):
     KEY_GISTS = "gists"
     DEFAULT_VALUE_URL_API = "https://api.github.com"
     DEFAULT_VALUE_GISTS = "gists"
-    DEFAULT_VALUE_USER = None
