@@ -1,400 +1,347 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess
+import sys
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any
 
-import requests
+import yaml
 from yklibpy.command.command import Command
-from yklibpy.command.fetchcount import FetchCount
-from yklibpy.db.appstore import AppStore
 from yklibpy.common.loggerx import Loggerx
+from yklibpy.common.timex import Timex
+from yklibpy.db.appstore import AppStore
 
 from gistx.appconfigx import AppConfigx
 from gistx.gistinfo import GistInfo
 
-
-class PublicAndPrivateGistInfoAssoc(NamedTuple):
-    public_gist_info_assoc: dict[str, GistInfo]
-    private_gist_info_assoc: dict[str, GistInfo]
-
-
-class PathAndPublicAndPrivateGistInfoAssoc(NamedTuple):
-    path: Path
-    repo_limit: int
-    public_and_privat_gist_info_assoc: PublicAndPrivateGistInfoAssoc
+GIST_ID_PATTERN = re.compile(r"^[0-9a-f]{8,}$", re.IGNORECASE)
+TABLE_SPLIT_PATTERN = re.compile(r"\t+|\s{2,}")
+WINDOWS_RESERVED_PATTERN = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 
 class CommandClone(Command):
     REPO_KIND_PUBLIC = "public"
     REPO_KIND_PRIVATE = "private"
     REPO_KIND_ALL = "all"
-    REPO_COUNT_ALL = -1
-    PER_PAGE = 100
-    MAX_REPOS_IS_UNLIMITED = -1
-    BLANK_LIST = -1
+    GH_GIST_LIST_LIMIT = 1000
 
-    def __init__(self, appstore: AppStore, needness_of_refresh: bool, needness_of_top_dir: bool):
+    def __init__(self, appstore: AppStore) -> None:
         self.appstore = appstore
         self.user = self.appstore.get_from_config(AppConfigx.BASE_NAME_CONFIG, AppConfigx.KEY_USER)
-        self.url_api = self.appstore.get_from_config(AppConfigx.BASE_NAME_CONFIG, AppConfigx.KEY_URL_API)
-        self.gists = self.appstore.get_from_config(AppConfigx.BASE_NAME_CONFIG, AppConfigx.KEY_GISTS)
-        self.url = f"{self.url_api}/{self.user}/{self.gists}"
-        self.call_git_clone = True
-        self.fetchcount = FetchCount(needness_of_refresh, needness_of_top_dir, self.appstore)
-        self.fetchcount_value = self.fetchcount.get()
         self.args: argparse.Namespace | None = None
+        if not self.user:
+            raise ValueError("GitHub user is not configured. Run `gistx setup` first.")
 
     def run(self, args: argparse.Namespace, repo_kind: str) -> None:
         self.args = args
-        max_repos = args.max_repos
-        ret = self.clone_my_all_gists(max_repos, repo_kind)
-        if ret:
-            self.fetchcount.output_db()
+        workspace_path = self._ensure_user_workspace()
+        fetch_path = workspace_path / "fetch.yaml"
+        gistlist_top_dir = workspace_path / AppConfigx.BASE_NAME_GISTLIST_TOP
+        fetched_new_list = self._should_refresh_list(fetch_path, gistlist_top_dir, bool(args.force))
+        timestamp = Timex.get_now()
 
-    def get_dir_list(self, path: Path) -> list[Path]:
-        return [item for item in list(path.glob("*")) if item.is_dir()]
-
-    def get_dir_list_x(self, top_directory_path: Path) -> list[int]:
-        fullpath_dir_list = self.get_dir_list(top_directory_path)
-        Loggerx.debug(f"get_dir_list | fullpath_dir_list={fullpath_dir_list}", __name__)
-        Loggerx.debug(f"fullpath_dir_list={fullpath_dir_list}", __name__)
-        sorted_dir_list = sorted([int(p.name) for p in fullpath_dir_list], reverse=True)
-        Loggerx.debug(f"sorted_dir_list={sorted_dir_list}", __name__)
-        return sorted_dir_list
-
-    def get_next_top_dir_path(self, top_directory_path: Path) -> Path :
-        next_top_dir_path = None
-        sorted_dir_list = self.get_dir_list_x(top_directory_path)
-        if len(sorted_dir_list) == 0:
-            next_top_dir = 1
-            next_top_dir_path = top_directory_path / str(next_top_dir)
+        if fetched_new_list:
+            stdout_str = self._execute_gh_gist_list(self.GH_GIST_LIST_LIMIT)
+            if stdout_str is None:
+                stdout_str= ""
+            list_count, gist_info_assoc = self._create_list_snapshot(gistlist_top_dir, stdout_str)
         else:
-            current_top_dir = sorted_dir_list[0]
+            list_count, gist_info_assoc = self._load_latest_list_snapshot(gistlist_top_dir)
 
-            if self.fetchcount.needness_of_top_dir:
-                next_top_dir = current_top_dir + 1
-                next_top_dir_path = top_directory_path / str(next_top_dir)
-                Loggerx.debug(f"CommandClone 1 next_top_dir_path={next_top_dir_path}", __name__)
-            else:
-                next_top_dir_path = top_directory_path / str(current_top_dir)
+        gist_infos = self._filter_gists(gist_info_assoc, repo_kind)
+        gist_infos = self._limit_gists(gist_infos, args.max_gists)
 
-        next_top_dir_path.mkdir(parents=True, exist_ok=True)
+        list_dir = gistlist_top_dir / str(list_count)
+        gistrepo_top_dir = list_dir / "gistrepo"
+        gistrepo_top_dir.mkdir(parents=True, exist_ok=True)
+        clone_count = self._get_next_clone_count(gistrepo_top_dir)
+        clone_dir = gistrepo_top_dir / str(clone_count)
+        clone_dir.mkdir(parents=True, exist_ok=True)
 
-        return next_top_dir_path
+        success_count, failure_count = self._clone_gists(gist_infos, clone_dir)
+        self._write_progress_yaml(
+            gistrepo_top_dir / "progress.yaml",
+            clone_count,
+            {
+                "timestamp": timestamp,
+                "repo_kind": repo_kind,
+                "requested_count": len(gist_infos),
+                "success_count": success_count,
+                "failure_count": failure_count,
+                "list_count": list_count,
+            },
+        )
 
-    def is_valid_next_top_dir_path(self, next_top_dir_path: Path) -> bool:
-        return next_top_dir_path.exists()
+        if fetched_new_list:
+            self._write_fetch_yaml(fetch_path, list_count, timestamp, len(gist_infos))
 
-    def get_public_and_private_gist_info_assoc(self, gist_info_assoc: dict[str, GistInfo]) -> PublicAndPrivateGistInfoAssoc:
-        public_gist_info_assoc = {}
-        private_gist_info_assoc = {}
-        for k, v in gist_info_assoc.items():
-            if v.public:
-                public_gist_info_assoc[k] = v
-            else:
-                private_gist_info_assoc[k] = v
-        return PublicAndPrivateGistInfoAssoc(public_gist_info_assoc, private_gist_info_assoc)
-
-    def prepare_clone_dir_path(self, max_repos: int, repo_kind: str) -> PathAndPublicAndPrivateGistInfoAssoc:
-        Loggerx.debug(f"prepare_clone_dir_path | max_repos={max_repos} | repo_kind={repo_kind}", __name__)
-        [self.gist_info_assoc, count_of_all_repo] = self.get_gist_info_assoc(max_repos)
-
-        publicAndPrivateGistInfoAssoc = self.get_public_and_private_gist_info_assoc(self.gist_info_assoc)
-
-        repo_limit = count_of_all_repo
-
-        repo_directory_assoc = self.appstore.get_directory_assoc_from_db(AppConfigx.BASE_NAME_REPO)
-        repo_directory_path = Path( repo_directory_assoc[AppConfigx.PATH] )
-
-        next_top_dir_path = self.get_next_top_dir_path(repo_directory_path)
-
-        dir_level2 = 0
-
-        dir_level1 = int(next_top_dir_path.name)
-        Loggerx.debug(f"dir_level1={dir_level1}", __name__)
-        sorted_dir_list_level2 = self.get_dir_list_x(next_top_dir_path)
-        if len(sorted_dir_list_level2) > 0:
-            dir_level2 = sorted_dir_list_level2[0]
-        else:
-            dir_level2 = None
-
-        assert next_top_dir_path is not None
-
-        if self.fetchcount.needness_of_refresh:
-            # Githubから新規にダウンロードする必要があるのに、既存のダウンロード先をさしている場合はエラー
-            if dir_level2 == self.fetchcount_value:
-                raise ValueError(f"fetchcount_value={self.fetchcount_value} exists")
-        else:
-            # Githubから新規にダウンロードする必要がないのに、既存のダウンロード先をさしていない場合はエラー
-            if dir_level2 != self.fetchcount_value:
-                raise ValueError(f"fetchcount_value={self.fetchcount_value} does not exist")
-
-        clone_dir_path = next_top_dir_path / str(self.fetchcount_value)
-        Loggerx.debug(f"CommandClone 2 clone_dir_path={clone_dir_path}", __name__)
-        clone_dir_path.mkdir(parents=True, exist_ok=True)
-
-        return PathAndPublicAndPrivateGistInfoAssoc(clone_dir_path, repo_limit, publicAndPrivateGistInfoAssoc)
-
-    def clone_my_all_gists(
-        self, max_repos: int, repo_kind: str) -> bool:
-        """
-        GitHubの自分のpublic gistをすべて取得して clone する
-        """
-        pathAndPublicAndPrivateGistInfoAssoc = self.prepare_clone_dir_path(max_repos, repo_kind)        
-
-        clone_dir_path = pathAndPublicAndPrivateGistInfoAssoc.path
-        repo_limit = pathAndPublicAndPrivateGistInfoAssoc.repo_limit
-        public_gist_info_assoc = pathAndPublicAndPrivateGistInfoAssoc.public_and_privat_gist_info_assoc.public_gist_info_assoc
-        private_gist_info_assoc = pathAndPublicAndPrivateGistInfoAssoc.public_and_privat_gist_info_assoc.private_gist_info_assoc
-
-        Loggerx.debug(f"clone_dir_path={clone_dir_path}", __name__)
-        Loggerx.debug(f"public_gist_info_assoc={public_gist_info_assoc}", __name__)
-        Loggerx.debug(f"private_gist_info_assoc={private_gist_info_assoc}", __name__)
-
-        if repo_kind == self.REPO_KIND_PUBLIC:
-            repo_limit = self.clone_with_repo_kind(clone_dir_path, public_gist_info_assoc, self.REPO_KIND_PUBLIC, repo_limit)
-        elif repo_kind == self.REPO_KIND_PRIVATE:
-            repo_limit = self.clone_with_repo_kind(clone_dir_path, private_gist_info_assoc, self.REPO_KIND_PRIVATE, repo_limit)
-        elif repo_kind == self.REPO_KIND_ALL:
-            repo_limit = self.clone_with_repo_kind(clone_dir_path, public_gist_info_assoc, self.REPO_KIND_PUBLIC, repo_limit)
-            repo_limit = self.clone_with_repo_kind(clone_dir_path, private_gist_info_assoc, self.REPO_KIND_PRIVATE, repo_limit)
-        else:
-            raise ValueError(f"Invalid repo_kind: {repo_kind}")
-        
-        return True
-
-    def clone_with_repo_kind(self, clone_dir_path: Path, gist_info_assoc: dict[str, GistInfo], repo_kind: str, repo_limit: int) -> int:
-        dest_dir_path = clone_dir_path / repo_kind
-        dest_dir_path.mkdir(parents=True, exist_ok=True)
-        collected_gist_info_assoc = self.get_gist_content_with_assoc(gist_info_assoc, dest_dir_path, repo_limit)
-        repo_limit -= len(list(collected_gist_info_assoc.keys()))
-        return repo_limit
-
-    def is_valid_gist_info_assoc(self, gist_info_assoc) -> bool:
-        Loggerx.debug(f"is_valid_gist_info_assoc | gist_info_assoc={gist_info_assoc}", __name__)
-        Loggerx.debug(f"is_valid_gist_info_assoc | len(gist_info_assoc)={len(gist_info_assoc)}", __name__)
-        return gist_info_assoc is not None and len(gist_info_assoc) > 0
-
-    def adjust_gist_info_assoc(self, gist_info_assoc, repo_limit: int) -> tuple[dict[str, GistInfo], int]:
-        keys = gist_info_assoc.keys()
-        len_of_keys = len(keys)
-        if repo_limit == self.MAX_REPOS_IS_UNLIMITED:
-            repo_limit = len(keys)
-        else:
-            if len_of_keys >= repo_limit:
-                new_keys = list(keys)[:repo_limit]
-                gist_info_assoc = {k: v for k, v in gist_info_assoc.items() if k in new_keys}
-            else:
-                repo_limit = len_of_keys
-
-        return (gist_info_assoc, repo_limit)
-
-    def get_gist_info_assoc(self, repo_limit: int) -> tuple[dict[str, GistInfo], int]:
-        # dbディレクトリで、BASE_NAME_LISTで指定されたファイルの内容を連想配列で取得
-        gist_info_assoc = self.appstore.get_file_assoc_from_db(AppConfigx.BASE_NAME_LIST)
-        force = bool(getattr(self.args, "force", False))
-        Loggerx.debug(f"get_gist_info_assoc | force={force} self.args={self.args}", __name__)
-        ret = self.is_valid_gist_info_assoc(gist_info_assoc)
-        Loggerx.debug(f"get_gist_info_assoc | ret={ret}", __name__)
-
-        # まだ一度もGithubから取得していない、または、強制的にGithubから取得を指示された場合は、Githubから取得
-        if not ret or force:
-            gists = self.get_gists_from_github(repo_limit)
-            # Githubから取得した結果を、GistInfoオブジェクトに変換
-            from_github = True
-            gist_info_assoc = self.analyze_gists(gists, from_github)
-            self.appstore.output_db("list", gist_info_assoc)
-            # gist_info_assocに代入された連想配列の要素数を、リミット分にする
-            repo_limit = len( list(gist_info_assoc.keys()) )            
-
-            Loggerx.debug(f"get_gist_info_assoc | gist_info_assoc={gist_info_assoc}", __name__)
-        else:
-            [gist_info_assoc, repo_limit] = self.adjust_gist_info_assoc(gist_info_assoc, repo_limit)
-            from_github = False
-            gist_info_assoc = self.analyze_gists(gist_info_assoc, from_github)
-
-        return (gist_info_assoc, repo_limit)
-
-    def get_gists_from_github(self, repo_limit: int) -> dict[str, dict[str, Any]]:
-        session = requests.Session()
-        remain_repo_count = repo_limit
-        per_page = self.PER_PAGE
-        if per_page > repo_limit:
-            per_page = repo_limit
-        page = 1
-        gist_list = []
-        gists: dict[str, dict[str, Any]] = {}
-        kind = "public"
-
-        while True:
-            res = session.get(self.url, params={"per_page": per_page, "page": page})
-            #  res.raise_for_status()
-            if res.status_code != 200:
-                Loggerx.error(f"Error: {res.status_code}")
-                break
-
-            batch = res.json()
-            if not batch:
-                break
-            for g in batch:
-                g["kind"] = kind
-
-            gist_list.extend(batch)
-            page += 1
-            remain_repo_count -= len(batch)
-            if remain_repo_count <= 0:
-                break
-
-        '''
-         ['url', 'forks_url', 'commits_url', 'id', 'node_id', 'git_pull_url', 'git_push_url',
-         'html_url', 'files', 'public', 'created_at', 'updated_at', 'description', 'comments',
-         'user', 'comments_enabled', 'comments_url', 'owner', 'truncated', 'kind']
-        '''
-        # ページ単位でリモートリポジトリを取得しているため、以下でより正確にリミットを守る
-        gist_list_2 = gist_list[:repo_limit]
-        for g in gist_list_2:
-            if 'clone_url' in g.keys():
-                clone_url = g['clone_url']
-            else:
-                clone_url = g['git_pull_url']
-                if clone_url is None or clone_url == "":
-                    clone_url = g['git_push_url']
-                    if clone_url is None or clone_url == "":
-                        raise ValueError(f'clone_url={clone_url}')
-            g['gist_id'] = g['id']
-            gists[g['id']] = g
-
-        Loggerx.debug(f"get_gists_from_github | Found {len(gists)} gists", __name__)
-        return gists
-
-    def analyze_gists(self, gists: dict[str, Any], from_github:bool = False) -> dict[str, GistInfo]:
-        gist_info_assoc = {}
-        params: list[Any] | None = []
-
-        for gist_id, g in gists.items():
-            if isinstance(g, GistInfo):
-                clone_url = g.clone_url
-                if not clone_url:
-                    raise ValueError(f'clone_url={clone_url}')
-                gist_info_assoc[gist_id] = g
-            else:
-                params = self.prepare_gist_info_params(g, from_github)
-                if params is not None:
-                    gist_info_assoc[gist_id] = GistInfo(*params)
-
+    def _parse_gh_gist_list_output(self, stdout_str: str) -> dict[str, GistInfo]:
+        gist_info_assoc: dict[str, GistInfo] = {}
+        for raw_line in stdout_str.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            gist_info = self._parse_gh_gist_list_line(line)
+            if gist_info is None:
+                continue
+            gist_info_assoc[gist_info.gist_id] = gist_info
         return gist_info_assoc
 
-    def prepare_gist_info_params(self, g: dict[str, Any], from_github: bool = False) -> list[Any] | None:
-        gist_id = g["gist_id"]
+    def _parse_gh_gist_list_line(self, line: str) -> GistInfo | None:
+        parts = [part.strip() for part in TABLE_SPLIT_PATTERN.split(line) if part.strip()]
+        if not parts:
+            return None
 
-        if from_github:
-            clone_url = g['git_pull_url']
-            if clone_url is None or clone_url == "":
-                clone_url = g["git_push_url"]
-                if clone_url is None or clone_url == "":
-                    raise ValueError(f'clone_url={clone_url}')
-
-            name = g["description"]
-            if not name:
+        gist_id = parts[0]
+        if not GIST_ID_PATTERN.match(gist_id):
+            lowered = gist_id.lower()
+            if lowered in {"id", "gist", "gistid"}:
                 return None
-            match = re.match(r"\[(.*)\]", name)
-            if not match:
-                title = ""
-                title_parts: list[str] = []
+            raise ValueError(f"Unable to parse gh gist list line: {line}")
+
+        visibility_idx = -1
+        visibility = ""
+        for idx, part in enumerate(parts):
+            lowered = part.lower()
+            if lowered in {"public", "secret"}:
+                visibility_idx = idx
+                visibility = lowered
+                break
+
+        if visibility_idx == -1:
+            match = re.search(r"\b(public|secret)\b", line, flags=re.IGNORECASE)
+            if match is None:
+                raise ValueError(f"Visibility not found in gh gist list line: {line}")
+            visibility = match.group(1).lower()
+            prefix = line[: match.start()].strip()
+            prefix_parts = [part.strip() for part in TABLE_SPLIT_PATTERN.split(prefix) if part.strip()]
+            if len(prefix_parts) < 2:
+                raise ValueError(f"Unable to parse gist name from line: {line}")
+            name_parts = prefix_parts[1:-1] or prefix_parts[1:]
+        else:
+            if visibility_idx >= 2:
+                name_parts = parts[1 : visibility_idx - 1]
+                if not name_parts:
+                    name_parts = parts[1:visibility_idx]
             else:
-                title = match.group(1)
-                title_parts = title.split("|")
+                name_parts = parts[1:2]
 
-            name_without_japanese = (
-                re.sub(
-                    r"[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF\u3000-\u303F]", "", name
-                )
-                if name
-                else ""
+        name = " ".join(name_parts).strip()
+        if not name:
+            name = gist_id
+        return GistInfo(gist_id=gist_id, name=name, public=(visibility == "public"))
+
+    def _sanitize_gist_name(self, name: str) -> str:
+        sanitized = WINDOWS_RESERVED_PATTERN.sub("_", name).strip().rstrip(".")
+        if not sanitized:
+            return "_none"
+        return sanitized
+
+    def _make_unique_dir_name(self, base_name: str, used_names: set[str]) -> str:
+        if base_name not in used_names:
+            used_names.add(base_name)
+            return base_name
+
+        suffix = 1
+        while True:
+            candidate = f"{base_name}-{suffix}"
+            if candidate not in used_names:
+                used_names.add(candidate)
+                return candidate
+            suffix += 1
+
+    def _load_yaml_file(self, path: Path) -> dict[str, Any]:
+        if not path.exists():
+            return {}
+        with open(path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        if not isinstance(data, dict):
+            raise ValueError(f"YAML root must be a mapping: {path}")
+        return data
+
+    def _save_yaml_file(self, path: Path, data: dict[str, Any]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            yaml.dump(data, f, allow_unicode=True, sort_keys=False)
+
+    def _serialize_gist_info_assoc(self, gist_info_assoc: dict[str, GistInfo]) -> dict[str, dict[str, Any]]:
+        return {
+            gist_id: {
+                "gist_id": gist_info.gist_id,
+                "name": gist_info.name,
+                "public": gist_info.public,
+                "dir_name": gist_info.dir_name,
+            }
+            for gist_id, gist_info in gist_info_assoc.items()
+        }
+
+    def _deserialize_gist_info_assoc(self, data: dict[str, Any]) -> dict[str, GistInfo]:
+        gist_info_assoc: dict[str, GistInfo] = {}
+        for gist_id, item in data.items():
+            if isinstance(item, GistInfo):
+                gist_info_assoc[gist_id] = item
+                continue
+            if not isinstance(item, dict):
+                raise ValueError(f"Invalid gist entry for {gist_id}: {item}")
+            gist_info_assoc[gist_id] = GistInfo(
+                gist_id=item.get("gist_id", gist_id),
+                name=item.get("name", gist_id),
+                public=bool(item.get("public", True)),
+                dir_name=item.get("dir_name", ""),
             )
-            if not name_without_japanese:
-                return None
+        return gist_info_assoc
 
-            name_alnum = (
-                "".join(c for c in name_without_japanese if c.isalnum())
-                if name_without_japanese
-                else ""
+    def _ensure_user_workspace(self) -> Path:
+        workspace_path = self._get_workspace_path()
+        gistlist_top_dir = workspace_path / AppConfigx.BASE_NAME_GISTLIST_TOP
+        workspace_path.mkdir(parents=True, exist_ok=True)
+        gistlist_top_dir.mkdir(parents=True, exist_ok=True)
+        fetch_path = workspace_path / "fetch.yaml"
+        if not fetch_path.exists():
+            self._save_yaml_file(fetch_path, {})
+        return workspace_path
+
+    def _get_workspace_path(self) -> Path:
+        if sys.platform == "win32":
+            local_app_data = Path(
+                os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
             )
         else:
-            clone_url = g["clone_url"]
-            if not clone_url:
-                raise ValueError(f'clone_url={clone_url}')
-            title = g["title"]
-            title_parts = g["title_parts"]
-            name = g["name"]
-            name_without_japanese = g["name_without_japanese"]
-            name_alnum = g["name_alnum"]
+            local_app_data = Path.home() / ".local" / "share"
+        return local_app_data / "gistx" / self.user
 
-        public = g.get("public", True)
-        return [gist_id, name, title, title_parts, name_without_japanese, name_alnum, clone_url, public]
+    def _should_refresh_list(self, fetch_path: Path, gistlist_top_dir: Path, force: bool) -> bool:
+        if force:
+            return True
+        fetch_assoc = self._load_yaml_file(fetch_path)
+        if not fetch_assoc:
+            return True
+        latest_list_path = self._get_latest_list_path(gistlist_top_dir)
+        return latest_list_path is None or not latest_list_path.exists()
 
-    def get_sorted_classified(self, gist_info_assoc: dict[str, GistInfo]) -> dict[str, list[GistInfo]]:
-        classified: dict[str, list[GistInfo]] = {}
-        for gist_id, gist_info in gist_info_assoc.items():
-            name_alnum = gist_info.name_alnum
-            if name_alnum not in classified:
-                classified[name_alnum] = []
-            classified[name_alnum].append(gist_info)
-        return classified
+    def _execute_gh_gist_list(self, limit: int) -> str:
+        result = subprocess.run(
+            ["gh", "gist", "list", "--limit", str(limit)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            message = result.stderr.strip() or result.stdout.strip() or "gh gist list failed"
+            raise RuntimeError(message)
+        return result.stdout
 
-    def get_gist_content(self, gist_id: str, gist_info: GistInfo, dest_dir_path: Path, dir_name: str) -> None:
-        safe_name = dir_name
-        target_dir_path = dest_dir_path / safe_name
-        Loggerx.debug(f"CommandClone 3get_gist_content | target_dir_path={target_dir_path}", __name__)
-        dest_dir_path.mkdir(parents=True, exist_ok=True)
+    def _create_list_snapshot(self, gistlist_top_dir: Path, stdout_str: str) -> tuple[int, dict[str, GistInfo]]:
+        gist_info_assoc = self._parse_gh_gist_list_output(stdout_str)
+        list_count = self._get_next_numeric_dir_value(gistlist_top_dir)
+        list_dir = gistlist_top_dir / str(list_count)
+        list_dir.mkdir(parents=True, exist_ok=True)
+        self._save_yaml_file(list_dir / "list.yaml", self._serialize_gist_info_assoc(gist_info_assoc))
+        (list_dir / "gistrepo").mkdir(parents=True, exist_ok=True)
+        return list_count, gist_info_assoc
 
-        if target_dir_path.exists():
-            return
+    def _load_latest_list_snapshot(self, gistlist_top_dir: Path) -> tuple[int, dict[str, GistInfo]]:
+        latest_list_path = self._get_latest_list_path(gistlist_top_dir)
+        if latest_list_path is None or not latest_list_path.exists():
+            raise FileNotFoundError(f"Latest list.yaml not found under {gistlist_top_dir}")
+        list_count = int(latest_list_path.parent.name)
+        data = self._load_yaml_file(latest_list_path)
+        return list_count, self._deserialize_gist_info_assoc(data)
 
-        Loggerx.debug(f"get_gist_content | [clone] {safe_name}", __name__)
+    def _get_latest_list_path(self, gistlist_top_dir: Path) -> Path | None:
+        numeric_dirs = self._get_numeric_subdirs(gistlist_top_dir)
+        if not numeric_dirs:
+            return None
+        return gistlist_top_dir / str(max(numeric_dirs)) / "list.yaml"
 
-        if self.call_git_clone:
-            try:
-                subprocess.run(
-                    ["git", "clone", gist_info.clone_url, str(target_dir_path)],
-                    check=True,
-                )
-            except subprocess.CalledProcessError as e:
-                Loggerx.error(f"gist_id {gist_id}")
-                Loggerx.error(f"[error] {safe_name}: {e}")
-                Loggerx.error("================================================\n")
-                exit(10)
+    def _filter_gists(self, gist_info_assoc: dict[str, GistInfo], repo_kind: str) -> list[GistInfo]:
+        gist_infos = list(gist_info_assoc.values())
+        if repo_kind == self.REPO_KIND_PUBLIC:
+            return [gist_info for gist_info in gist_infos if gist_info.public]
+        if repo_kind == self.REPO_KIND_PRIVATE:
+            return [gist_info for gist_info in gist_infos if not gist_info.public]
+        if repo_kind == self.REPO_KIND_ALL:
+            return gist_infos
+        raise ValueError(f"Invalid repo_kind: {repo_kind}")
 
-    def get_gist_content_with_assoc(self, gist_info_assoc: dict[str, GistInfo], dest_dir_path: Path, repo_limit: int) -> dict[str, list[GistInfo]]:
-        collected_gist_info_assoc = {}
-        if repo_limit == self.MAX_REPOS_IS_UNLIMITED:
-            repo_limit = len(gist_info_assoc)
+    def _limit_gists(self, gist_infos: list[GistInfo], max_gists: int | None) -> list[GistInfo]:
+        if max_gists is None:
+            return gist_infos
+        return gist_infos[:max_gists]
 
-        classified = self.get_sorted_classified(gist_info_assoc)
-        for key, gist_infos in classified.items():
-            length = len(gist_infos)
-            if length > 1:
-                for i in range(length):
-                    if key == "":
-                        dir_name = f"_none/{i}"
-                    else:
-                        dir_name = f"{key}-{i}"
-                    gist_info = gist_infos[i]
-                    gist_id = gist_info.gist_id
-                    self.get_gist_content(gist_id, gist_info, dest_dir_path, dir_name)
-                    gist_info.add_dir_name(dir_name)
+    def _get_next_clone_count(self, gistrepo_top_dir: Path) -> int:
+        return self._get_next_numeric_dir_value(gistrepo_top_dir)
+
+    def _get_next_numeric_dir_value(self, top_dir: Path) -> int:
+        numeric_dirs = self._get_numeric_subdirs(top_dir)
+        if not numeric_dirs:
+            return 1
+        return max(numeric_dirs) + 1
+
+    def _get_numeric_subdirs(self, top_dir: Path) -> list[int]:
+        if not top_dir.exists():
+            return []
+        values: list[int] = []
+        for child in top_dir.iterdir():
+            if child.is_dir() and child.name.isdigit():
+                values.append(int(child.name))
+        return values
+
+    def _clone_gists(self, gist_infos: list[GistInfo], clone_dir: Path) -> tuple[int, int]:
+        used_names: set[str] = set()
+        success_count = 0
+        failure_count = 0
+
+        for gist_info in gist_infos:
+            visibility_dir = self.REPO_KIND_PUBLIC if gist_info.public else self.REPO_KIND_PRIVATE
+            dest_dir = clone_dir / visibility_dir
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            dir_name = self._make_unique_dir_name(self._sanitize_gist_name(gist_info.name), used_names)
+            gist_info.add_dir_name(dir_name)
+            target_dir = dest_dir / dir_name
+
+            if target_dir.exists():
+                failure_count += 1
+                Loggerx.error(f"Clone target already exists: {target_dir}", __name__)
+                continue
+
+            result = subprocess.run(
+                ["gh", "gist", "clone", gist_info.gist_id, str(target_dir)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode == 0:
+                success_count += 1
             else:
-                dir_name = f"{key}"
-                gist_info = gist_infos[0]
-                gist_id = gist_info.gist_id
-                self.get_gist_content(gist_id, gist_info, dest_dir_path, dir_name)
-                gist_info.add_dir_name(dir_name)
+                failure_count += 1
+                Loggerx.error(
+                    f"Failed to clone gist {gist_info.gist_id}: {result.stderr.strip() or result.stdout.strip()}",
+                    __name__,
+                )
 
-            collected_gist_info_assoc[key] = gist_infos
+        return success_count, failure_count
 
-        self.appstore.output_db(AppConfigx.BASE_NAME_LIST, gist_info_assoc)
+    def _write_fetch_yaml(
+        self,
+        fetch_path: Path,
+        list_count: int,
+        timestamp: str,
+        clone_target_count: int,
+    ) -> None:
+        fetch_assoc = self._load_yaml_file(fetch_path)
+        fetch_assoc[str(list_count)] = [timestamp, clone_target_count]
+        self._save_yaml_file(fetch_path, fetch_assoc)
 
-        return collected_gist_info_assoc
+    def _write_progress_yaml(
+        self,
+        progress_path: Path,
+        clone_count: int,
+        summary: dict[str, object],
+    ) -> None:
+        progress_assoc = self._load_yaml_file(progress_path)
+        progress_assoc[str(clone_count)] = summary
+        self._save_yaml_file(progress_path, progress_assoc)
