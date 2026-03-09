@@ -40,7 +40,7 @@ class Clix:
         # p_check.set_defaults(func=cmd_check)
 
         # サブコマンド "fix"
-        p_fix = subparsers.add_parser(self.FIX, help="Fix repo directory and fetch.yml")
+        p_fix = subparsers.add_parser(self.FIX, help="Fix gistlist directory and fetch.yaml")
         p_fix.set_defaults(func=command_dict[self.FIX])
         p_fix.add_argument("-v", "--verbose", action="store_true")
 

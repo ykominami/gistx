@@ -44,12 +44,15 @@ class CommandClone(Command):
         timestamp = Timex.get_now()
 
         if fetched_new_list:
-            stdout_str = self._execute_gh_gist_list(self.GH_GIST_LIST_LIMIT)
-            if stdout_str is None:
-                stdout_str= ""
-            list_count, gist_info_assoc = self._create_list_snapshot(gistlist_top_dir, stdout_str)
+            list_count, gist_info_assoc = self._fetch_list_snapshot(gistlist_top_dir)
         else:
-            list_count, gist_info_assoc = self._load_latest_list_snapshot(gistlist_top_dir)
+            try:
+                list_count, gist_info_assoc = self._load_latest_list_snapshot(gistlist_top_dir)
+            except FileNotFoundError:
+                # If the latest cache disappears between refresh judgment and load,
+                # fall back to a fresh gist list fetch.
+                fetched_new_list = True
+                list_count, gist_info_assoc = self._fetch_list_snapshot(gistlist_top_dir)
 
         gist_infos = self._filter_gists(gist_info_assoc, repo_kind)
         gist_infos = self._limit_gists(gist_infos, args.max_gists)
@@ -201,7 +204,7 @@ class CommandClone(Command):
         gistlist_top_dir.mkdir(parents=True, exist_ok=True)
         fetch_path = workspace_path / "fetch.yaml"
         if not fetch_path.exists():
-            self._save_yaml_file(fetch_path, {})
+            fetch_path.write_text("", encoding="utf-8")
         return workspace_path
 
     def _get_workspace_path(self) -> Path:
@@ -233,6 +236,10 @@ class CommandClone(Command):
             message = result.stderr.strip() or result.stdout.strip() or "gh gist list failed"
             raise RuntimeError(message)
         return result.stdout
+
+    def _fetch_list_snapshot(self, gistlist_top_dir: Path) -> tuple[int, dict[str, GistInfo]]:
+        stdout_str = self._execute_gh_gist_list(self.GH_GIST_LIST_LIMIT)
+        return self._create_list_snapshot(gistlist_top_dir, stdout_str or "")
 
     def _create_list_snapshot(self, gistlist_top_dir: Path, stdout_str: str) -> tuple[int, dict[str, GistInfo]]:
         gist_info_assoc = self._parse_gh_gist_list_output(stdout_str)

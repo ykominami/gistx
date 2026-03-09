@@ -2,73 +2,112 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from pathlib import Path
+from typing import Any
+
+import yaml
 
 from yklibpy.command.command import Command
 from yklibpy.common.loggerx import Loggerx
 from yklibpy.common.timex import Timex
-from yklibpy.config.appconfig import AppConfig
 from yklibpy.db.appstore import AppStore
 
 from gistx.appconfigx import AppConfigx
 
 
+def remove_empty_directories(root: Path) -> int:
+    removed = 0
+    for dirpath_str, _, _ in os.walk(str(root), topdown=False):
+        dirpath = Path(dirpath_str)
+        if dirpath == root:
+            continue
+        if not any(dirpath.iterdir()):
+            dirpath.rmdir()
+            removed += 1
+            Loggerx.debug(f"remove_empty_directories | removed: {dirpath}", __name__)
+    return removed
+
+
+def collect_existing_gistlist_counts(gistlist_top_dir: Path) -> list[int]:
+    counts: list[int] = []
+    for child in gistlist_top_dir.iterdir():
+        if child.is_dir() and child.name.isdigit():
+            counts.append(int(child.name))
+    return sorted(counts)
+
+
+def reconcile_fetch_entries(
+    fetch_assoc: dict[str, object],
+    existing_counts: list[int],
+) -> dict[str, object]:
+    reconciled: dict[str, object] = {}
+    timestamp = Timex.get_now()
+    for count in existing_counts:
+        key = str(count)
+        if key in fetch_assoc:
+            reconciled[key] = fetch_assoc[key]
+        else:
+            reconciled[key] = [timestamp, 0]
+    return reconciled
+
+
 class CommandFix(Command):
     def __init__(self, appstore: AppStore) -> None:
         self.appstore = appstore
+        self.user = self.appstore.get_from_config(AppConfigx.BASE_NAME_CONFIG, AppConfigx.KEY_USER)
+        if not self.user:
+            raise ValueError("GitHub user is not configured. Run `gistx setup` first.")
 
     def run(self, args: argparse.Namespace) -> None:
-        repo_directory_assoc = self.appstore.get_directory_assoc_from_db(AppConfigx.BASE_NAME_REPO)
-        repo_path = Path(repo_directory_assoc[AppConfigx.PATH])
-        if not repo_path.exists():
-            raise FileNotFoundError(f"repo directory not found: {repo_path}")
-        removed = self._remove_empty_dirs(repo_path)
+        workspace_path = self._get_workspace_path()
+        if not workspace_path.is_dir():
+            raise FileNotFoundError(f"user workspace not found: {workspace_path}")
+
+        gistlist_top_dir = workspace_path / AppConfigx.BASE_NAME_GISTLIST_TOP
+        if not gistlist_top_dir.is_dir():
+            raise FileNotFoundError(f"gistlist directory not found: {gistlist_top_dir}")
+
+        fetch_path = workspace_path / "fetch.yaml"
+        removed = self._remove_empty_dirs(gistlist_top_dir)
         Loggerx.debug(f"CommandFix.run | removed {removed} empty directories", __name__)
-        self._fix_fetch_yaml(repo_path)
+        existing_counts = self._collect_existing_counts(gistlist_top_dir)
+        self._fix_fetch_yaml(fetch_path, existing_counts)
 
     def _remove_empty_dirs(self, path: Path) -> int:
-        removed = 0
-        for dirpath_str, dirnames, filenames in os.walk(str(path), topdown=False):
-            # print(f"### dirpath_str={dirpath_str}, dirnames={dirnames}, filenames={filenames}")
-            dirpath = Path(dirpath_str)
-            if dirpath == path:
-                continue
-            if not any(dirpath.iterdir()):
-                dirpath.rmdir()
-                removed += 1
-                Loggerx.debug(f"CommandFix._remove_empty_dirs | removed: {dirpath}", __name__)
-        return removed
+        return remove_empty_directories(path)
 
-    def _get_max_numeric_dir(self, repo_path: Path) -> int | None:
-        values: list[int] = []
-        for level1 in repo_path.iterdir():
-            if not level1.is_dir():
-                continue
-            for level2 in level1.iterdir():
-                if not level2.is_dir():
-                    continue
-                name = level2.name
-                if name.isdigit():
-                    val = int(name)
-                    if val > 0:
-                        values.append(val)
-        return max(values) if values else None
+    def _collect_existing_counts(self, gistlist_top_dir: Path) -> list[int]:
+        return collect_existing_gistlist_counts(gistlist_top_dir)
 
-    def _fix_fetch_yaml(self, repo_path: Path) -> None:
-        max_dir = self._get_max_numeric_dir(repo_path)
-        if max_dir is None:
-            Loggerx.debug("CommandFix._fix_fetch_yaml | no numeric dirs found, skipping", __name__)
-            return
+    def _fix_fetch_yaml(self, fetch_path: Path, existing_counts: list[int]) -> None:
+        fetch_assoc = self._load_yaml_file(fetch_path)
+        reconciled = reconcile_fetch_entries(fetch_assoc, existing_counts)
+        self._save_yaml_file(fetch_path, reconciled)
+        Loggerx.debug(
+            f"CommandFix._fix_fetch_yaml | fetch.yaml updated, counts={existing_counts}",
+            __name__,
+        )
 
-        fetch_assoc: dict[str, str] = self.appstore.get_file_assoc_from_db(AppConfig.BASE_NAME_FETCH) or {}
+    def _load_yaml_file(self, path: Path) -> dict[str, Any]:
+        if not path.exists():
+            return {}
+        with open(path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        if not isinstance(data, dict):
+            raise ValueError(f"YAML root must be a mapping: {path}")
+        return data
 
-        if str(max_dir) not in fetch_assoc:
-            fetch_assoc[str(max_dir)] = Timex.get_now()
+    def _save_yaml_file(self, path: Path, data: dict[str, object]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            yaml.dump(data, f, allow_unicode=True, sort_keys=False)
 
-        keys_to_remove = [k for k in fetch_assoc if k.isdigit() and int(k) > max_dir]
-        for k in keys_to_remove:
-            del fetch_assoc[k]
-            Loggerx.debug(f"CommandFix._fix_fetch_yaml | removed key: {k}", __name__)
-
-        self.appstore.output_db(AppConfig.BASE_NAME_FETCH, fetch_assoc)
-        Loggerx.debug(f"CommandFix._fix_fetch_yaml | fetch.yml updated, max_dir={max_dir}", __name__)
+    def _get_workspace_path(self) -> Path:
+        if sys.platform == "win32":
+            local_app_data = Path(
+                os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
+            )
+        else:
+            local_app_data = Path.home() / ".local" / "share"
+        return local_app_data / "gistx" / self.user

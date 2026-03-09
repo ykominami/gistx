@@ -2,7 +2,6 @@ import os
 import sys
 from pathlib import Path
 
-import yaml
 from yklibpy.command.command import Command
 from yklibpy.command.command_gh_user import CommandGhUser
 from yklibpy.common.util import Util
@@ -27,10 +26,6 @@ class CommandSetup(Command):
         }
 
         self.appstore.output_config(AppConfigx.KIND_CONFIG, data)
-        self.appstore.output_db(AppConfigx.BASE_NAME_DB, {})
-        self.appstore.output_db(AppConfigx.BASE_NAME_FETCH, {})
-        self.appstore.output_db(AppConfigx.BASE_NAME_LIST, {})
-        self.appstore.mkdir_db(AppConfigx.BASE_NAME_REPO)
         self._prepare_user_workspace(user)
 
     def _prepare_user_workspace(self, user: str) -> None:
@@ -39,9 +34,7 @@ class CommandSetup(Command):
         workspace_path.mkdir(parents=True, exist_ok=True)
         gistlist_top_dir.mkdir(parents=True, exist_ok=True)
         fetch_path = workspace_path / "fetch.yaml"
-        if not fetch_path.exists():
-            with open(fetch_path, "w", encoding="utf-8") as f:
-                yaml.dump({}, f, allow_unicode=True, sort_keys=False)
+        fetch_path.write_text("", encoding="utf-8")
 
     def _get_workspace_path(self, user: str) -> Path:
         if sys.platform == "win32":
