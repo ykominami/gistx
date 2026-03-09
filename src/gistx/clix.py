@@ -2,14 +2,13 @@ import argparse
 from typing import Any
 
 from yklibpy.cli import Cli
-from gistx.command_clone import CommandClone
+
 
 class Clix:
     SETUP = "setup"
     CLONE = "clone"
     CHECK = "check"
     FIX = "fix"
-    MAX_REPOS_IS_UNLIMITED = -1
 
     def __init__(self, description: str, command_dict: dict[str, Any]) -> None:
         self.cli = Cli(description)
@@ -24,12 +23,13 @@ class Clix:
         p_setup.set_defaults(func=command_dict[self.SETUP])
 
         # サブコマンド "clone"
-        p_clone = subparsers.add_parser(self.CLONE, help="Clone all gists")
+        p_clone = subparsers.add_parser(self.CLONE, help="Clone gists")
         p_clone.set_defaults(func=command_dict[self.CLONE])
-        p_clone.add_argument("--public", action="store_true", help="Clone only public gists")
-        p_clone.add_argument("--private", action="store_true", help="Clone only private gists")
-        p_clone.add_argument("--all", action="store_true", help="Clone only all gists")
-        p_clone.add_argument("--max_repos", type=int, default=CommandClone.MAX_REPOS_IS_UNLIMITED, help="Maximum number of repos to clone (-1 for all)")
+        visibility_group = p_clone.add_mutually_exclusive_group(required=True)
+        visibility_group.add_argument("--public", action="store_true", help="Clone only public gists")
+        visibility_group.add_argument("--private", action="store_true", help="Clone only private gists")
+        visibility_group.add_argument("--all", action="store_true", help="Clone all gists")
+        p_clone.add_argument("--max_gists", type=int, default=None, help="Maximum number of gists to clone")
         p_clone.add_argument("-v", "--verbose", action="store_true")
         p_clone.add_argument("-f", "--force", action="store_true")
 
@@ -47,7 +47,3 @@ class Clix:
     def parse_args(self) -> argparse.Namespace:
         self.args = self.parser.parse_args()
         return self.args
-    
-    def get_args(self) -> argparse.Namespace | None:
-        return self.args
-

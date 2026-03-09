@@ -1,25 +1,21 @@
 import argparse
 import logging
 
-from yklibpy.common.util_yaml import UtilYaml
-
 from gistx.clix import Clix
-from yklibpy.db.appstore import AppStore
-from yklibpy.db.storex import Storex
-from yklibpy.common.loggerx import Loggerx
 from gistx.appconfigx import AppConfigx
 from gistx.command_setup import CommandSetup
 from gistx.command_clone import CommandClone
 from gistx.command_fix import CommandFix
+from yklibpy.common.loggerx import Loggerx
+from yklibpy.db.appstore import AppStore
+from yklibpy.db.storex import Storex
 
 class Gistx:
-    _constructors_registered = False
-
     @classmethod
     def init_appstore(cls) -> AppStore:
         Storex.set_file_type_dict(AppConfigx.file_type_dict)
 
-        appstore = AppStore("gistx", AppConfigx.file_assoc, None, AppConfigx.directory_assoc) 
+        appstore = AppStore("gistx", AppConfigx.file_assoc, None, AppConfigx.directory_assoc)
         appstore.prepare_config_file()
         appstore.prepare_db_file()
         appstore.prepare_db_directory()
@@ -34,58 +30,27 @@ class Gistx:
 
     @classmethod
     def clone(cls, args: argparse.Namespace) -> None:
-        Loggerx.debug(f"args={args}", __name__)
         if args.verbose:
             Loggerx._set_log_level(logging.DEBUG)
-            Loggerx.debug(f"verbose=True", __name__)
         else:
-            Loggerx.debug(f"verbose=False", __name__)
             Loggerx._set_log_level(logging.INFO)
 
-        repo_kind = None
+        flag_count = sum(1 for flag in (args.public, args.private, args.all) if flag)
+        if flag_count != 1:
+            raise ValueError("Exactly one of --public, --private, --all must be specified")
+        if args.max_gists is not None and args.max_gists <= 0:
+            raise ValueError("--max_gists must be greater than 0")
+
         if args.public:
-            if args.private:
-                if args.all:
-                    raise ValueError("Only one of --public, --private, --all can be specified")
-                else:
-                    raise ValueError("Only one of --public, --private, --all can be specified")
-            else:
-                if args.all:
-                    raise ValueError("Only one of --public, --private, --all can be specified")
-                else:
-                    repo_kind = CommandClone.REPO_KIND_PUBLIC
-
+            repo_kind = CommandClone.REPO_KIND_PUBLIC
+        elif args.private:
+            repo_kind = CommandClone.REPO_KIND_PRIVATE
         else:
-            if args.private:
-                if args.all:
-                    raise ValueError("Only one of --public, --private, --all can be specified")
-                else:
-                    repo_kind = CommandClone.REPO_KIND_PRIVATE
-            else:
-                if args.all:
-                    repo_kind = CommandClone.REPO_KIND_ALL
-                else:
-                    raise ValueError("Only one of --public, --private, --all can be specified")
+            repo_kind = CommandClone.REPO_KIND_ALL
 
-        if not cls._constructors_registered:
-            list = ["tag:yaml.org,2002:python/object:gistx.gistinfo.GistInfo"]
-            UtilYaml._register_constructors(list)
-            Gistx._constructors_registered = True
-
-        appsstore = cls.init_appstore()
-        appsstore.load_file_all()  # type: ignore[no-untyped-call]
-        list_assoc = appsstore.get_file_assoc_from_db(AppConfigx.BASE_NAME_LIST)
-
-        needness_of_top_dir = len(list_assoc) == 0
-        print(f"needness_of_top_dir={needness_of_top_dir}")
-        needness_of_refresh = needness_of_top_dir or args.force
-        print(f"needness_of_refresh={needness_of_refresh}")
-        # exit()
-        Loggerx.debug(f"needness_of_top_dir={needness_of_top_dir}", __name__)
-        Loggerx.debug(f"needness_of_refresh={needness_of_refresh}", __name__)
-        # exit()
-        command = CommandClone(appsstore, needness_of_refresh, needness_of_top_dir)
-
+        appstore = cls.init_appstore()
+        appstore.load_file_config_all()  # type: ignore[no-untyped-call]
+        command = CommandClone(appstore)
         command.run(args, repo_kind)
 
     @classmethod
@@ -96,10 +61,10 @@ class Gistx:
     def fix(cls, args: argparse.Namespace) -> None:
         if args.verbose:
             Loggerx._set_log_level(logging.DEBUG)
-            Loggerx.debug(f"verbose=True", __name__)
+            Loggerx.debug("verbose=True", __name__)
         else:
             Loggerx._set_log_level(logging.INFO)
-            Loggerx.debug(f"verbose=False", __name__)
+            Loggerx.debug("verbose=False", __name__)
 
         appstore = cls.init_appstore()
         appstore.load_file_all()
