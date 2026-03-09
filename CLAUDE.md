@@ -32,7 +32,10 @@ gistx clone --private
 gistx clone --all
 
 # Limit number of repos, verbose output, force refresh of cached list
-gistx clone --public --max_repos 10 -v -f
+gistx clone --public --max_gists 10 -v -f
+
+# Repair gistlist/fetch metadata
+gistx fix
 ```
 
 ### Type Checking and Linting
@@ -51,9 +54,9 @@ uv run mypy src/
 
 ### CLI Flow
 
-`mainx()` → `Clix` (subcommand router) → `Gistx.setup()` or `Gistx.clone()`
+`mainx()` → `Clix` (subcommand router) → `Gistx.setup()`, `Gistx.clone()`, or `Gistx.fix()`
 
-**`Clix`** (`clix.py`) builds argparse subcommands: `setup`, `clone`, `check`. Each subcommand dispatches to a method on `Gistx`.
+**`Clix`** (`clix.py`) builds argparse subcommands: `setup`, `clone`, `check`, `fix`. Each subcommand dispatches to a method on `Gistx`.
 
 ### Core Components
 
@@ -61,6 +64,7 @@ uv run mypy src/
 - Initializes `AppStore` (from `yklibpy`) to manage config/DB files and directories
 - `setup` subcommand: runs `CommandSetup` which detects `gh` user and writes config
 - `clone` subcommand: validates flags, registers YAML constructors once (class-level flag), then delegates to `CommandClone`
+- `fix` subcommand: removes empty directories under `gistlist/` and reconciles `fetch.yaml` with existing list snapshots
 
 **`AppConfigx`** (`appconfigx.py`) — extends `yklibpy.AppConfig`
 - Declares two DB keys: `list` (YAML file of cached `GistInfo` objects) and `repo` (directory for cloned gists)
@@ -70,10 +74,13 @@ uv run mypy src/
 
 **`CommandClone`** (`command_clone.py`) — main clone logic
 - Fetches gists from `https://api.github.com/users/{user}/gists` with pagination (100/page)
-- Caches result as YAML via `AppStore`; uses cache on subsequent runs unless `--force`
-- Separates public/private gists; clones into a versioned directory tree:
-  `{repo_dir}/{top_dir}/{fetch_count}/{public|private}/{dir_name}`
-- Uses `FetchCount` (from `yklibpy`) to manage versioned fetch directories
+- Writes list snapshots under `{workspace}/gistlist/{list_count}/list.yaml`
+- Clones public/private gists under `{workspace}/gistlist/{list_count}/gistrepo/{clone_count}/{public|private}/{dir_name}`
+- Updates `{workspace}/fetch.yaml` with `{list_count}: [timestamp, clone_target_count]`
+
+**`CommandFix`** (`command_fix.py`) — maintenance logic
+- Removes empty directories under `{workspace}/gistlist/` without deleting the top directory itself
+- Reconciles `{workspace}/fetch.yaml` so its numeric keys match the existing `gistlist/{list_count}` directories
 
 **`GistInfo`** (`gistinfo.py`) — data model for a single gist
 - Key derived fields: `title` (from `[title]` in description), `name_without_japanese` (CJK stripped), `name_alnum` (alphanumeric only, used as directory name)
