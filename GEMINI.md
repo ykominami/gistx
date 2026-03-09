@@ -99,3 +99,109 @@ uv run mypy src/
 - **requests**: GitHub API calls
 - **yklibpy** (`../yklibpy`, editable): `AppStore`, `AppConfig`, `Loggerx`, `Timex`, `FetchCount`, `Command`, `UtilYaml`, `Cli`, `Tomlop`
 - **mypy** + **ty** (dev): static type checking; `yklibpy.*` imports are set to `follow_imports = "skip"`
+
+### 用語の定義
+- ユーザ
+gh auth login　で認証されたGitHubのアカウント
+指定されGitHubアカウントのアカウント名と同一のユーザ名を持つ
+
+- コンフィグディレクトリ
+ディレクトリ名は"gistx"
+この下にYAML形式のコンフィグファイル(config.yaml)が存在する
+
+以下の位置に存在する
+　AppData\Roaming\gistx
+
+- コンフィグファイル
+アプリ全体に対するYAML形式のコンフィグファイル
+ファイル名は"config.yaml"
+
+ファイルのフォーマットは以下の通り
+gists: gists
+url_api: https://api.github.com
+user: <ユーザ名>
+
+以下の位置に存在する
+　AppData\Roaming\gistx\config.yaml
+
+- ユーザディレクトリ
+ディレクトリ名はユーザ名
+以下の位置に存在する
+　AppData\Local\gistx\ユーザ名
+
+この下にfetchファイル、gistlistトップディレクトリが存在する
+gistlistトップディレクトリは1個のみ存在する。
+以下の位置に存在する
+　AppData\Local\gistx\ユーザ名\fetch.yaml
+　AppData\Local\gistx\ユーザ名\gistlist
+
+- fetchファイル
+ファイル名は"fetch.yaml"
+gh gist list を実行した回数とcloneしたgistの個数を記録するYAML形式ファイル
+gh gist list の実行が成功した後に更新される。
+1回のgh gist listですべてのgistの一覧を取得できるように、十分大きな最大個数を指定して実行する。
+
+フォーマットは、以下の通り
+　回数: 
+　- 実行時のタイムスタンプ
+  - clonesしたgistの個数
+
+- gistlistトップディレクトリ
+ディレクトリ名は"gistlist"
+この下にgistlistディレクトリが存在する。
+gistlistトップディレクトリは複数個存在してもよい。
+
+
+- gistlistディレクトリ
+ディレクトリ名はgh gist listを実行した回数
+gh repo listの出力を格納するlist.yamlとgistrepoトップディレクトリをもつ。
+
+以下の位置に存在する
+　AppData\Local\gistx\ユーザ名\gistlist\<gh gist listを実行した回数>
+
+- gistrepoトップディレクトリ
+ディレクトリ名は"gistrepo"
+gh repo cloneの出力を格納するdb.yamlをもつ。
+またgitrepoディレクトリも持つ。
+gitrepoディレクトリは複数個存在する場合もある。
+
+以下の位置に存在する
+　AppData\Local\gistx\ユーザ名\gistlist\<gh gist listを実行した回数>\gistrepo
+
+- gistrepoディレクトリ
+ディレクトリ名はサブコマンドcloneを実行して、ghコマンドを用いて、指定個数分のgistのリポジトリをcloneしようとした回数
+
+以下の位置に存在する
+　AppData\Local\gistx\ユーザ名\gistlist\<gh gist listを実行した回数>\gistrepo\<cloneしようとした回数>
+
+- publicトップディレクトリ
+ディレクトリ名は"public"
+publicなgistのclone先ディレクトリを持つ。
+
+以下の位置に存在する
+　AppData\Local\gistx\ユーザ名\gistlist\<gh gist listを実行した回数>\gistrepo\<cloneしようとした回数>\public
+
+- 個別publicなgistディレクトリ
+ディレクトリ名はgistの名称
+gistの名称は、gh gist listで取得する。
+publicなgistのclone先ディレクトリ。
+
+以下の位置に存在する
+　AppData\Local\gistx\ユーザ名\gistlist\<gh gist listを実行した回数>\gistrepo\<cloneしようとした回数>\publc\<gistの名称>
+
+- privateトップディレクトリ
+ディレクトリ名は"private"
+privateなgistのclone先ディレクトリを持つ。
+
+以下の位置に存在する
+　AppData\Local\gistx\ユーザ名\gistlist\<gh gist listを実行した回数>\gistrepo\<cloneしようとした回数>\private
+
+- 個別privateなgistディレクトリ
+ディレクトリ名はgistの名称
+gistの名称は、gh gist listで取得する。
+privatecなgistのclone先ディレクトリ。
+
+以下の位置に存在する
+　AppData\Local\gistx\ユーザ名\gistlist\<gh gist listを実行した回数>\gistrepo\<cloneしようとした回数>\private\<gistの名称>
+
+以上で規定したディレクトリ、ファイルをのみを作成、利用してください。
