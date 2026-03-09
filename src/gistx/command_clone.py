@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import locale
 import os
 import re
 import subprocess
@@ -230,16 +231,41 @@ class CommandClone(Command):
             ["gh", "gist", "list", "--limit", str(limit)],
             check=False,
             capture_output=True,
-            text=True,
+            text=False,
         )
+        stdout_text = self._decode_command_output(result.stdout, "stdout", "gh gist list", "H1")
+        stderr_text = self._decode_command_output(result.stderr, "stderr", "gh gist list", "H1")
         if result.returncode != 0:
-            message = result.stderr.strip() or result.stdout.strip() or "gh gist list failed"
+            message = stderr_text.strip() or stdout_text.strip() or "gh gist list failed"
             raise RuntimeError(message)
-        return result.stdout
+        return stdout_text
 
     def _fetch_list_snapshot(self, gistlist_top_dir: Path) -> tuple[int, dict[str, GistInfo]]:
         stdout_str = self._execute_gh_gist_list(self.GH_GIST_LIST_LIMIT)
         return self._create_list_snapshot(gistlist_top_dir, stdout_str or "")
+
+    def _decode_command_output(
+        self,
+        data: bytes | None,
+        stream_name: str,
+        command_name: str,
+        hypothesis_id: str,
+    ) -> str:
+        if not data:
+            return ""
+
+        preferred_encoding = locale.getpreferredencoding(False)
+        tried_encodings = ["utf-8"]
+        if preferred_encoding.lower() != "utf-8":
+            tried_encodings.append(preferred_encoding)
+
+        for encoding in tried_encodings:
+            try:
+                return data.decode(encoding)
+            except UnicodeDecodeError:
+                continue
+
+        return data.decode("utf-8", errors="replace")
 
     def _create_list_snapshot(self, gistlist_top_dir: Path, stdout_str: str) -> tuple[int, dict[str, GistInfo]]:
         gist_info_assoc = self._parse_gh_gist_list_output(stdout_str)
@@ -319,14 +345,16 @@ class CommandClone(Command):
                 ["gh", "gist", "clone", gist_info.gist_id, str(target_dir)],
                 check=False,
                 capture_output=True,
-                text=True,
+                text=False,
             )
+            stdout_text = self._decode_command_output(result.stdout, "stdout", "gh gist clone", "H2")
+            stderr_text = self._decode_command_output(result.stderr, "stderr", "gh gist clone", "H2")
             if result.returncode == 0:
                 success_count += 1
             else:
                 failure_count += 1
                 Loggerx.error(
-                    f"Failed to clone gist {gist_info.gist_id}: {result.stderr.strip() or result.stdout.strip()}",
+                    f"Failed to clone gist {gist_info.gist_id}: {stderr_text.strip() or stdout_text.strip()}",
                     __name__,
                 )
 
