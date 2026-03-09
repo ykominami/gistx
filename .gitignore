@@ -33,3 +33,5 @@ private/
 /dist/
 *.code-workspace
 .cursor/
+
+debug-*.log
