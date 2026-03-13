@@ -27,11 +27,6 @@ ignore_missing_imports = true
 
 [project.scripts]
 gistx = "gistx.gistx:mainx"
-tomlx = "gistx.tomlx:main"
-x = "gistx.gistx:mainx"
-check = "gistx.gistx:check"
-check2 = "gistx.gistx:check2"
-check3 = "gistx.gistx:check3"
 
 [tool.uv.sources.yklibpy]
 path = "../yklibpy"
