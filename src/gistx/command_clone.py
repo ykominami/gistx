@@ -7,7 +7,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import yaml
 from yklibpy.command.command import Command
@@ -22,6 +22,9 @@ GIST_ID_PATTERN = re.compile(r"^[0-9a-f]{8,}$", re.IGNORECASE)
 TABLE_SPLIT_PATTERN = re.compile(r"\t+|\s{2,}")
 WINDOWS_RESERVED_PATTERN = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
+class ConfigFileInfo(NamedTuple):
+    parent_path: Path
+    assoc: dict[str, dict[str, Any]]
 
 class CommandClone(Command):
     REPO_KIND_PUBLIC = "public"
@@ -36,12 +39,11 @@ class CommandClone(Command):
         if not self.user:
             raise ValueError("GitHub user is not configured. Run `gistx setup` first.")
 
-    def run(self, args: argparse.Namespace, repo_kind: str) -> None:
-        self.args = args
+    def _prepare_clone(self, force:bool) -> None:
         workspace_path = self._ensure_user_workspace()
         fetch_path = workspace_path / "fetch.yaml"
         gistlist_top_dir = workspace_path / AppConfigx.BASE_NAME_GISTLIST_TOP
-        fetched_new_list = self._should_refresh_list(fetch_path, gistlist_top_dir, bool(args.force))
+        fetched_new_list = self._should_refresh_list(fetch_path, gistlist_top_dir, force)
         timestamp = Timex.get_now()
 
         if fetched_new_list:
@@ -55,15 +57,36 @@ class CommandClone(Command):
                 fetched_new_list = True
                 list_count, gist_info_assoc = self._fetch_list_snapshot(gistlist_top_dir)
 
-        gist_infos = self._filter_gists(gist_info_assoc, repo_kind)
-        gist_infos = self._limit_gists(gist_infos, args.max_gists)
-
         list_dir = gistlist_top_dir / str(list_count)
         gistrepo_top_dir = list_dir / "gistrepo"
         gistrepo_top_dir.mkdir(parents=True, exist_ok=True)
         clone_count = self._get_next_clone_count(gistrepo_top_dir)
         clone_dir = gistrepo_top_dir / str(clone_count)
         clone_dir.mkdir(parents=True, exist_ok=True)
+
+        return (gist_info_assoc, clone_dir, clone_count, gistlist_top_dir, timestamp, list_count)
+ 
+    def run(self, args: argparse.Namespace, repo_kind: str) -> None:
+        self.args = args
+        # workspace_path = self._ensure_user_workspace()
+        # fetch_path = workspace_path / "fetch.yaml"
+        # gistlist_top_dir = workspace_path / AppConfigx.BASE_NAME_GISTLIST_TOP
+        # fetched_new_list = self._should_refresh_list(fetch_path, gistlist_top_dir, bool(args.force))
+        # timestamp = Timex.get_now()
+
+        # if fetched_new_list:
+        #     list_count, gist_info_assoc = self._fetch_list_snapshot(gistlist_top_dir)
+        # else:
+        #     try:
+        #         list_count, gist_info_assoc = self._load_latest_list_snapshot(gistlist_top_dir)
+        #     except FileNotFoundError:
+        #         # If the latest cache disappears between refresh judgment and load,
+        #         # fall back to a fresh gist list fetch.
+        #         fetched_new_list = True
+        #         list_count, gist_info_assoc = self._fetch_list_snapshot(gistlist_top_dir)
+
+        gist_infos = self._filter_gists(gist_info_assoc, repo_kind)
+        gist_infos = self._limit_gists(gist_infos, args.max_gists)
 
         success_count, failure_count = self._clone_gists(gist_infos, clone_dir)
         self._write_progress_yaml(
@@ -88,6 +111,7 @@ class CommandClone(Command):
             line = raw_line.strip()
             if not line:
                 continue
+            print(f'CommandClone _parse_gh_gist_list_output line: {line}')
             gist_info = self._parse_gh_gist_list_line(line)
             if gist_info is None:
                 continue
@@ -104,7 +128,7 @@ class CommandClone(Command):
             lowered = gist_id.lower()
             if lowered in {"id", "gist", "gistid"}:
                 return None
-            raise ValueError(f"Unable to parse gh gist list line: {line}")
+            # raise ValueError(f"Unable to parse gh gist list line: {line}")
 
         visibility_idx = -1
         visibility = ""
