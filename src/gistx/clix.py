@@ -1,16 +1,25 @@
 import argparse
-from typing import Any
+from typing import Callable
 
 from yklibpy.cli import Cli
 
+CommandHandler = Callable[[argparse.Namespace], None]
+
 
 class Clix:
+    """`gistx` のサブコマンドとオプション定義を構築する。"""
+
     SETUP = "setup"
     CLONE = "clone"
     CHECK = "check"
     FIX = "fix"
 
-    def __init__(self, description: str, command_dict: dict[str, Any]) -> None:
+    def __init__(self, description: str, command_dict: dict[str, CommandHandler]) -> None:
+        """CLI パーサを初期化し、各サブコマンドを登録する。
+
+        `setup`、`clone`、`check`、`fix` の各サブコマンドに対応するハンドラを
+        `command_dict` から受け取り、必要なオプションを設定する。
+        """
         self.cli = Cli(description)
         self.args: argparse.Namespace | None = None
 
@@ -45,5 +54,6 @@ class Clix:
         p_fix.add_argument("-v", "--verbose", action="store_true")
 
     def parse_args(self) -> argparse.Namespace:
+        """コマンドライン引数を解析して `argparse.Namespace` を返す。"""
         self.args = self.parser.parse_args()
         return self.args
