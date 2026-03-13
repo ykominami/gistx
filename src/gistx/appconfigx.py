@@ -4,6 +4,8 @@ from yklibpy.config.appconfig import AppConfig
 
 
 class AppConfigx(AppConfig):
+    """`gistx` 用の設定名、DB 名、ディレクトリ名、既定値を定義する。"""
+
     file_type_dict = {**AppConfig.file_type_dict, AppConfig.FILE_TYPE_YAML: ".yaml"}
     file_type_reverse_dict = {ext_name: file_type for file_type, ext_name in file_type_dict.items()}
     file_synonym_dict = {
