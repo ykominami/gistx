@@ -120,10 +120,10 @@ class Gistx:
         """`fix` サブコマンドを実行して作業領域の整合性を修復する。"""
         if args.verbose:
             Loggerx._set_log_level(logging.DEBUG)
-            Loggerx.debug("verbose=True", __name__)
         else:
             Loggerx._set_log_level(logging.INFO)
-            Loggerx.debug("verbose=False", __name__)
+
+        Loggerx.debug("verbose=True", __name__)
 
         appstore = cls.init_appstore()
         cls._load_config_with_legacy_fallback(appstore)
