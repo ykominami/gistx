@@ -49,7 +49,6 @@ uv run mypy src/
 ### Entry Points (`pyproject.toml`)
 
 - `gistx` / `x`: `gistx.gistx:mainx` — main CLI dispatcher
-- `tomlx`: `gistx.tomlx:main` — TOML utility
 - `check`, `check2`, `check3`: `gistx.gistx:check*` — diagnostic stubs (not yet implemented)
 
 ### CLI Flow

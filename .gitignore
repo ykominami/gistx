@@ -20,12 +20,12 @@ _gist*/
 
 debug.log
 #
-private/
+# private/
 # work directory
 
 /_input/
 /_output/
-/_private/
+#/_private/
 /_gist_7/
 /.mypy_cache/
 /.ruff_cache/
