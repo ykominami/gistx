@@ -168,9 +168,9 @@ from gistx.command_fix import CommandFix
 @classmethod
 def fix(cls, args: argparse.Namespace) -> None:
     if args.verbose:
-        Loggerx._set_log_level(logging.DEBUG)
+        Loggerx.set_log_level(logging.DEBUG)
     else:
-        Loggerx._set_log_level(logging.INFO)
+        Loggerx.set_log_level(logging.INFO)
     appstore = cls.init_appstore()
     appstore.load_file_all()
     command = CommandFix(appstore)
