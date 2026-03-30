@@ -16,6 +16,7 @@ class GistInfo:
         """gist の識別子、表示名、公開状態、clone 先名を初期化する。"""
         self.gist_id = gist_id
         self.name = name
+
         self.public = public
         self.dir_name = dir_name
 

@@ -84,9 +84,9 @@ class Gistx:
         公開範囲の指定が不正な場合や `max_gists` が 0 以下の場合は失敗する。
         """
         if args.verbose:
-            Loggerx._set_log_level(logging.DEBUG)
+            Loggerx.set_log_level(logging.DEBUG)
         else:
-            Loggerx._set_log_level(logging.INFO)
+            Loggerx.set_log_level(logging.INFO)
 
         flag_count = sum(1 for flag in (args.public, args.private, args.all) if flag)
         if flag_count != 1:
@@ -119,9 +119,9 @@ class Gistx:
     def fix(cls, args: argparse.Namespace) -> None:
         """`fix` サブコマンドを実行して作業領域の整合性を修復する。"""
         if args.verbose:
-            Loggerx._set_log_level(logging.DEBUG)
+            Loggerx.set_log_level(logging.DEBUG)
         else:
-            Loggerx._set_log_level(logging.INFO)
+            Loggerx.set_log_level(logging.INFO)
 
         Loggerx.debug("verbose=True", __name__)
 

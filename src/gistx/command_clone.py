@@ -13,6 +13,7 @@ import yaml
 from yklibpy.command.command import Command
 from yklibpy.common.loggerx import Loggerx
 from yklibpy.common.timex import Timex
+from yklibpy.common.util import Util
 from yklibpy.db.appstore import AppStore
 
 from gistx.appconfigx import AppConfigx
@@ -20,7 +21,6 @@ from gistx.gistinfo import GistInfo
 
 GIST_ID_PATTERN = re.compile(r"^[0-9a-f]{8,}$", re.IGNORECASE)
 TABLE_SPLIT_PATTERN = re.compile(r"\t+|\s{2,}")
-WINDOWS_RESERVED_PATTERN = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 class ConfigFileInfo(NamedTuple):
     """設定ファイルの親ディレクトリと内容をまとめて保持する。"""
@@ -202,17 +202,9 @@ class CommandClone(Command):
         name = " ".join(name_parts).strip()
         if not name:
             name = gist_id
+        sanitized_name = Util.sanitize_dir_name(name)
+        name_alnum = re.sub(r"[^A-Za-z0-9]", "", sanitized_name)
         return GistInfo(gist_id=gist_id, name=name, public=(visibility == "public"))
-
-    def _sanitize_gist_name(self, name: str) -> str:
-        """gist 名を Windows でも使えるディレクトリ名へ正規化する。
-
-        禁止文字を `_` に置換し、空文字になった場合は `_none` を返す。
-        """
-        sanitized = WINDOWS_RESERVED_PATTERN.sub("_", name).strip().rstrip(".")
-        if not sanitized:
-            return "_none"
-        return sanitized
 
     def _make_unique_dir_name(self, base_name: str, used_names: set[str]) -> str:
         """重複を避ける clone 用ディレクトリ名を決定する。
@@ -464,7 +456,7 @@ class CommandClone(Command):
             visibility_dir = self.REPO_KIND_PUBLIC if gist_info.public else self.REPO_KIND_PRIVATE
             dest_dir = clone_dir / visibility_dir
             dest_dir.mkdir(parents=True, exist_ok=True)
-            dir_name = self._make_unique_dir_name(self._sanitize_gist_name(gist_info.name), used_names)
+            dir_name = self._make_unique_dir_name(Util.sanitize_dir_name(gist_info.name), used_names)
             gist_info.add_dir_name(dir_name)
             target_dir = dest_dir / dir_name
 
