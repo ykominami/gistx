@@ -335,8 +335,24 @@ class CommandClone(Command):
         stderr_text = self._decode_command_output(result.stderr, "stderr", "gh gist list", "H1")
         if result.returncode != 0:
             message = stderr_text.strip() or stdout_text.strip() or "gh gist list failed"
-            raise RuntimeError(message)
+            self._raise_gh_gist_list_error(message)
         return stdout_text
+
+    def _raise_gh_gist_list_error(self, message: str) -> None:
+        """`gh gist list` の失敗内容を判定し、利用者向けメッセージで終了する。"""
+        lowered = message.lower()
+        if "forbidden" in lowered:
+            raise SystemExit(
+                "Failed to access GitHub Gists due to missing permissions. "
+                "Run `gh auth refresh -s gist` and retry."
+            )
+        if (
+            "authentication" in lowered
+            or "gh auth login" in lowered
+            or "not logged in" in lowered
+        ):
+            raise SystemExit("GitHub CLI is not authenticated. Run `gh auth login` and retry.")
+        raise RuntimeError(message)
 
     def _fetch_list_snapshot(self, gistlist_top_dir: Path) -> tuple[int, dict[str, GistInfo]]:
         """最新の gist 一覧を取得して新しい `list.yaml` を作成する。"""
@@ -465,6 +481,7 @@ class CommandClone(Command):
                 Loggerx.error(f"Clone target already exists: {target_dir}", __name__)
                 continue
 
+            Loggerx.info(f"Cloning gist {gist_info.gist_id} to {str(target_dir)}", __name__)
             result = subprocess.run(
                 ["gh", "gist", "clone", gist_info.gist_id, str(target_dir)],
                 check=False,
