@@ -29,9 +29,9 @@ class CommandSetup(Command):
             user = user_value
         print(f"user={user}")
         data: dict[str, str] = {
-            AppConfigx.KEY_USER: user,
-            AppConfigx.KEY_URL_API: AppConfigx.DEFAULT_VALUE_URL_API,
             AppConfigx.KEY_GISTS: AppConfigx.DEFAULT_VALUE_GISTS,
+            AppConfigx.KEY_URL_API: AppConfigx.DEFAULT_VALUE_URL_API,
+            AppConfigx.KEY_USER: user,
         }
 
         self.appstore.output_config(AppConfigx.KIND_CONFIG, data)
