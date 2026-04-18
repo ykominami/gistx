@@ -19,6 +19,7 @@ class AppConfigx(AppConfig):
     BASE_NAME_LIST = "list"
     BASE_NAME_GIST = "gist"
     BASE_NAME_GISTLIST_TOP = "gistlist"
+    BASE_NAME_WORKSPACES_TOP = "workspaces"
     BASE_NAME_PROGRESS = "progress"
     BASE_NAME_GISTREPO_DB = "db"
     BASE_NAME_REPO = "repo"
@@ -29,7 +30,7 @@ class AppConfigx(AppConfig):
         AppConfig.PATH: {},
         AppConfig.VALUE: {},
     }
-    directory_assoc[AppConfig.KIND_DB][BASE_NAME_GISTLIST_TOP] = {
+    directory_assoc[AppConfig.KIND_DB][BASE_NAME_WORKSPACES_TOP] = {
         AppConfig.PATH: {},
     }
     directory_assoc[AppConfig.KIND_DB][BASE_NAME_REPO] = {

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import locale
 import os
 import re
@@ -13,14 +14,14 @@ import yaml
 from yklibpy.command.command import Command
 from yklibpy.common.loggerx import Loggerx
 from yklibpy.common.timex import Timex
-from yklibpy.common.util import Util
 from yklibpy.db.appstore import AppStore
 
 from gistx.appconfigx import AppConfigx
 from gistx.gistinfo import GistInfo
 
-GIST_ID_PATTERN = re.compile(r"^[0-9a-f]{8,}$", re.IGNORECASE)
+GIST_ID_PATTERN = re.compile(r"^[0-9a-f]{7,}$", re.IGNORECASE)
 TABLE_SPLIT_PATTERN = re.compile(r"\t+|\s{2,}")
+WINDOWS_INVALID_DIR_CHARS_PATTERN = re.compile(r'[<>:"/\\|?*\x00-\x1F]')
 
 class ConfigFileInfo(NamedTuple):
     """設定ファイルの親ディレクトリと内容をまとめて保持する。"""
@@ -35,6 +36,12 @@ class CommandClone(Command):
     REPO_KIND_PRIVATE = "private"
     REPO_KIND_ALL = "all"
     GH_GIST_LIST_LIMIT = 1000
+    _RECORD_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+    @staticmethod
+    def _record_timestamp_jst() -> str:
+        """`workspaces.yaml` / `progress.yaml` 用の JST タイムスタンプ（外部仕様 §11）。"""
+        return datetime.now(Timex.JST).strftime(CommandClone._RECORD_TIMESTAMP_FORMAT)
 
     def __init__(self, appstore: AppStore) -> None:
         """設定済みユーザを前提に clone コマンドを初期化する。
@@ -49,44 +56,41 @@ class CommandClone(Command):
         self.user: str = user_value
         self.args: argparse.Namespace | None = None
 
-    def _prepare_clone(self, force: bool) -> tuple[dict[str, GistInfo], Path, int, Path, str, int]:
-        """clone 実行に必要な作業ディレクトリと gist 一覧を準備する。
+    def _resolve_gist_list(
+        self, force: bool
+    ) -> tuple[dict[str, GistInfo], Path, Path, str, int, bool]:
+        """ユーザ workspace を確保し、gist 一覧を取得するか最新スナップショットを読む。
+
+        外部仕様 §9 の手順 1〜3 に相当する。
 
         Args:
             force: 既存キャッシュを無視して gist 一覧を再取得するかどうか。
 
         Returns:
-            gist 一覧、clone 先ディレクトリ、clone 回数、`gistlist` ディレクトリ、
-            実行時刻、一覧取得回数を返す。
+            gist 一覧、ワークスペーストップディレクトリ、ユーザ workspace、実行時刻、
+            ワークスペースID、一覧を新規取得したかどうか。
 
         Raises:
             FileNotFoundError: キャッシュ読込対象が消失し、再取得にも失敗した場合。
         """
         workspace_path = self._ensure_user_workspace()
-        fetch_path = workspace_path / "fetch.yaml"
-        gistlist_top_dir = workspace_path / AppConfigx.BASE_NAME_GISTLIST_TOP
-        fetched_new_list = self._should_refresh_list(fetch_path, gistlist_top_dir, force)
-        timestamp = Timex.get_now()
+        workspaces_yaml_path = workspace_path / "workspaces.yaml"
+        workspaces_top_dir = workspace_path / AppConfigx.BASE_NAME_WORKSPACES_TOP
+        fetched_new_list = self._should_refresh_list(workspaces_yaml_path, workspaces_top_dir, force)
+        timestamp = self._record_timestamp_jst()
 
         if fetched_new_list:
-            list_count, gist_info_assoc = self._fetch_list_snapshot(gistlist_top_dir)
+            list_count, gist_info_assoc = self._fetch_list_snapshot(workspaces_top_dir)
         else:
             try:
-                list_count, gist_info_assoc = self._load_latest_list_snapshot(gistlist_top_dir)
+                list_count, gist_info_assoc = self._load_latest_list_snapshot(workspaces_top_dir)
             except FileNotFoundError:
                 # If the latest cache disappears between refresh judgment and load,
                 # fall back to a fresh gist list fetch.
                 fetched_new_list = True
-                list_count, gist_info_assoc = self._fetch_list_snapshot(gistlist_top_dir)
+                list_count, gist_info_assoc = self._fetch_list_snapshot(workspaces_top_dir)
 
-        list_dir = gistlist_top_dir / str(list_count)
-        gistrepo_top_dir = list_dir / "gistrepo"
-        gistrepo_top_dir.mkdir(parents=True, exist_ok=True)
-        clone_count = self._get_next_clone_count(gistrepo_top_dir)
-        clone_dir = gistrepo_top_dir / str(clone_count)
-        clone_dir.mkdir(parents=True, exist_ok=True)
-
-        return gist_info_assoc, clone_dir, clone_count, gistlist_top_dir, timestamp, list_count
+        return gist_info_assoc, workspaces_top_dir, workspace_path, timestamp, list_count, fetched_new_list
 
     def run(self, args: argparse.Namespace, repo_kind: str) -> None:
         """指定された公開範囲の gist を clone し、進捗情報を記録する。
@@ -100,19 +104,20 @@ class CommandClone(Command):
             ValueError: 不正な `repo_kind` や設定値を検出した場合。
         """
         self.args = args
-        fetch_path = self._ensure_user_workspace() / "fetch.yaml"
-        fetched_new_list = self._should_refresh_list(
-            fetch_path,
-            self._get_workspace_path() / AppConfigx.BASE_NAME_GISTLIST_TOP,
-            bool(args.force),
+        gist_info_assoc, workspaces_top_dir, workspace_path, timestamp, list_count, fetched_new_list = (
+            self._resolve_gist_list(bool(args.force))
         )
-        gist_info_assoc, clone_dir, clone_count, gistlist_top_dir, timestamp, list_count = self._prepare_clone(
-            bool(args.force)
-        )
-        gistrepo_top_dir = clone_dir.parent
+        workspaces_yaml_path = workspace_path / "workspaces.yaml"
 
         gist_infos = self._filter_gists(gist_info_assoc, repo_kind)
         gist_infos = self._limit_gists(gist_infos, args.max_gists)
+
+        workspace_dir = workspaces_top_dir / str(list_count)
+        gistrepo_top_dir = workspace_dir / "gistrepo"
+        gistrepo_top_dir.mkdir(parents=True, exist_ok=True)
+        clone_count = self._get_next_clone_count(gistrepo_top_dir)
+        clone_dir = gistrepo_top_dir / str(clone_count)
+        clone_dir.mkdir(parents=True, exist_ok=True)
 
         success_count, failure_count = self._clone_gists(gist_infos, clone_dir)
         self._write_progress_yaml(
@@ -124,12 +129,12 @@ class CommandClone(Command):
                 "requested_count": len(gist_infos),
                 "success_count": success_count,
                 "failure_count": failure_count,
-                "list_count": list_count,
+                "workspace_id": list_count,
             },
         )
 
         if fetched_new_list:
-            self._write_fetch_yaml(fetch_path, list_count, timestamp, len(gist_infos))
+            self._write_workspaces_yaml(workspaces_yaml_path, list_count, timestamp, len(gist_infos))
 
     def _parse_gh_gist_list_output(self, stdout_str: str) -> dict[str, GistInfo]:
         """`gh gist list` の標準出力全体を `GistInfo` の辞書へ変換する。
@@ -142,7 +147,6 @@ class CommandClone(Command):
             line = raw_line.strip()
             if not line:
                 continue
-            print(f'CommandClone _parse_gh_gist_list_output line: {line}')
             gist_info = self._parse_gh_gist_list_line(line)
             if gist_info is None:
                 continue
@@ -170,7 +174,7 @@ class CommandClone(Command):
             lowered = gist_id.lower()
             if lowered in {"id", "gist", "gistid"}:
                 return None
-            # raise ValueError(f"Unable to parse gh gist list line: {line}")
+            raise ValueError(f"Unable to parse gist ID from gh gist list line: {line}")
 
         visibility_idx = -1
         visibility = ""
@@ -202,26 +206,7 @@ class CommandClone(Command):
         name = " ".join(name_parts).strip()
         if not name:
             name = gist_id
-        sanitized_name = Util.sanitize_dir_name(name)
-        name_alnum = re.sub(r"[^A-Za-z0-9]", "", sanitized_name)
         return GistInfo(gist_id=gist_id, name=name, public=(visibility == "public"))
-
-    def _make_unique_dir_name(self, base_name: str, used_names: set[str]) -> str:
-        """重複を避ける clone 用ディレクトリ名を決定する。
-
-        既出名と衝突する場合は `-1` 以降の連番を付与する。
-        """
-        if base_name not in used_names:
-            used_names.add(base_name)
-            return base_name
-
-        suffix = 1
-        while True:
-            candidate = f"{base_name}-{suffix}"
-            if candidate not in used_names:
-                used_names.add(candidate)
-                return candidate
-            suffix += 1
 
     def _load_yaml_file(self, path: Path) -> dict[str, object]:
         """YAML ファイルを読み込み、mapping として返す。
@@ -244,13 +229,12 @@ class CommandClone(Command):
             yaml.dump(data, f, allow_unicode=True, sort_keys=False)
 
     def _serialize_gist_info_assoc(self, gist_info_assoc: dict[str, GistInfo]) -> dict[str, dict[str, object]]:
-        """`GistInfo` の辞書を YAML 保存用の連想配列へ変換する。"""
+        """`GistInfo` の辞書を `gists.yaml` 保存用の連想配列へ変換する。"""
         return {
             gist_id: {
                 "gist_id": gist_info.gist_id,
                 "name": gist_info.name,
                 "public": gist_info.public,
-                "dir_name": gist_info.dir_name,
             }
             for gist_id, gist_info in gist_info_assoc.items()
         }
@@ -272,27 +256,25 @@ class CommandClone(Command):
             gist_id_value = item_dict.get("gist_id", gist_id)
             name_value = item_dict.get("name", gist_id)
             public_value = item_dict.get("public", True)
-            dir_name_value = item_dict.get("dir_name", "")
             gist_info_assoc[gist_id] = GistInfo(
                 gist_id=gist_id_value if isinstance(gist_id_value, str) else gist_id,
                 name=name_value if isinstance(name_value, str) else gist_id,
                 public=bool(public_value),
-                dir_name=dir_name_value if isinstance(dir_name_value, str) else "",
             )
         return gist_info_assoc
 
     def _ensure_user_workspace(self) -> Path:
         """ユーザ別 workspace と初期ファイルを存在する状態にする。
 
-        `gistlist` トップディレクトリと空の `fetch.yaml` が未作成なら生成する。
+        ワークスペーストップディレクトリと空の `workspaces.yaml` が未作成なら生成する。
         """
         workspace_path = self._get_workspace_path()
-        gistlist_top_dir = workspace_path / AppConfigx.BASE_NAME_GISTLIST_TOP
+        workspaces_top_dir = workspace_path / AppConfigx.BASE_NAME_WORKSPACES_TOP
         workspace_path.mkdir(parents=True, exist_ok=True)
-        gistlist_top_dir.mkdir(parents=True, exist_ok=True)
-        fetch_path = workspace_path / "fetch.yaml"
-        if not fetch_path.exists():
-            fetch_path.write_text("", encoding="utf-8")
+        workspaces_top_dir.mkdir(parents=True, exist_ok=True)
+        workspaces_yaml_path = workspace_path / "workspaces.yaml"
+        if not workspaces_yaml_path.exists():
+            workspaces_yaml_path.write_text("", encoding="utf-8")
         return workspace_path
 
     def _get_workspace_path(self) -> Path:
@@ -305,19 +287,21 @@ class CommandClone(Command):
             local_app_data = Path.home() / ".local" / "share"
         return local_app_data / "gistx" / self.user
 
-    def _should_refresh_list(self, fetch_path: Path, gistlist_top_dir: Path, force: bool) -> bool:
+    def _should_refresh_list(
+        self, workspaces_yaml_path: Path, workspaces_top_dir: Path, force: bool
+    ) -> bool:
         """gist 一覧を再取得する必要があるかを判定する。
 
-        `force` が真なら常に再取得し、それ以外では `fetch.yaml` と最新
-        `list.yaml` の存在有無で判断する。
+        `force` が真なら常に再取得し、それ以外では `workspaces.yaml` と最新
+        `gists.yaml` の存在有無で判断する。
         """
         if force:
             return True
-        fetch_assoc = self._load_yaml_file(fetch_path)
-        if not fetch_assoc:
+        workspaces_assoc = self._load_yaml_file(workspaces_yaml_path)
+        if not workspaces_assoc:
             return True
-        latest_list_path = self._get_latest_list_path(gistlist_top_dir)
-        return latest_list_path is None or not latest_list_path.exists()
+        latest_gists_path = self._get_latest_gists_path(workspaces_top_dir)
+        return latest_gists_path is None or not latest_gists_path.exists()
 
     def _execute_gh_gist_list(self, limit: int) -> str:
         """`gh gist list` を実行し、標準出力を文字列で返す。
@@ -354,10 +338,10 @@ class CommandClone(Command):
             raise SystemExit("GitHub CLI is not authenticated. Run `gh auth login` and retry.")
         raise RuntimeError(message)
 
-    def _fetch_list_snapshot(self, gistlist_top_dir: Path) -> tuple[int, dict[str, GistInfo]]:
-        """最新の gist 一覧を取得して新しい `list.yaml` を作成する。"""
+    def _fetch_list_snapshot(self, workspaces_top_dir: Path) -> tuple[int, dict[str, GistInfo]]:
+        """最新の gist 一覧を取得して新しい `gists.yaml` を作成する。"""
         stdout_str = self._execute_gh_gist_list(self.GH_GIST_LIST_LIMIT)
-        return self._create_list_snapshot(gistlist_top_dir, stdout_str or "")
+        return self._create_list_snapshot(workspaces_top_dir, stdout_str or "")
 
     def _decode_command_output(
         self,
@@ -387,35 +371,39 @@ class CommandClone(Command):
 
         return data.decode("utf-8", errors="replace")
 
-    def _create_list_snapshot(self, gistlist_top_dir: Path, stdout_str: str) -> tuple[int, dict[str, GistInfo]]:
-        """取得した gist 一覧から新しい `gistlist/<count>/list.yaml` を作成する。"""
+    def _create_list_snapshot(
+        self, workspaces_top_dir: Path, stdout_str: str
+    ) -> tuple[int, dict[str, GistInfo]]:
+        """取得した gist 一覧から新しい `workspaces/<ワークスペースID>/gists.yaml` を作成する。"""
         gist_info_assoc = self._parse_gh_gist_list_output(stdout_str)
-        list_count = self._get_next_numeric_dir_value(gistlist_top_dir)
-        list_dir = gistlist_top_dir / str(list_count)
-        list_dir.mkdir(parents=True, exist_ok=True)
-        self._save_yaml_file(list_dir / "list.yaml", self._serialize_gist_info_assoc(gist_info_assoc))
-        (list_dir / "gistrepo").mkdir(parents=True, exist_ok=True)
+        list_count = self._get_next_numeric_dir_value(workspaces_top_dir)
+        workspace_dir = workspaces_top_dir / str(list_count)
+        workspace_dir.mkdir(parents=True, exist_ok=True)
+        self._save_yaml_file(workspace_dir / "gists.yaml", self._serialize_gist_info_assoc(gist_info_assoc))
+        (workspace_dir / "gistrepo").mkdir(parents=True, exist_ok=True)
         return list_count, gist_info_assoc
 
-    def _load_latest_list_snapshot(self, gistlist_top_dir: Path) -> tuple[int, dict[str, GistInfo]]:
-        """最新の `list.yaml` を読み込み、その回数と gist 一覧を返す。
+    def _load_latest_list_snapshot(
+        self, workspaces_top_dir: Path
+    ) -> tuple[int, dict[str, GistInfo]]:
+        """最新の `gists.yaml` を読み込み、そのワークスペースIDと gist 一覧を返す。
 
         Raises:
-            FileNotFoundError: 読み込むべき `list.yaml` が存在しない場合。
+            FileNotFoundError: 読み込むべき `gists.yaml` が存在しない場合。
         """
-        latest_list_path = self._get_latest_list_path(gistlist_top_dir)
-        if latest_list_path is None or not latest_list_path.exists():
-            raise FileNotFoundError(f"Latest list.yaml not found under {gistlist_top_dir}")
-        list_count = int(latest_list_path.parent.name)
-        data = self._load_yaml_file(latest_list_path)
+        latest_gists_path = self._get_latest_gists_path(workspaces_top_dir)
+        if latest_gists_path is None or not latest_gists_path.exists():
+            raise FileNotFoundError(f"Latest gists.yaml not found under {workspaces_top_dir}")
+        list_count = int(latest_gists_path.parent.name)
+        data = self._load_yaml_file(latest_gists_path)
         return list_count, self._deserialize_gist_info_assoc(data)
 
-    def _get_latest_list_path(self, gistlist_top_dir: Path) -> Path | None:
-        """`gistlist` 配下で最大の数値ディレクトリにある `list.yaml` を返す。"""
-        numeric_dirs = self._get_numeric_subdirs(gistlist_top_dir)
+    def _get_latest_gists_path(self, workspaces_top_dir: Path) -> Path | None:
+        """`workspaces/` 配下で最大の数値ディレクトリにある `gists.yaml` を返す。"""
+        numeric_dirs = self._get_numeric_subdirs(workspaces_top_dir)
         if not numeric_dirs:
             return None
-        return gistlist_top_dir / str(max(numeric_dirs)) / "list.yaml"
+        return workspaces_top_dir / str(max(numeric_dirs)) / "gists.yaml"
 
     def _filter_gists(self, gist_info_assoc: dict[str, GistInfo], repo_kind: str) -> list[GistInfo]:
         """公開範囲の指定に応じて gist 一覧を絞り込む。
@@ -439,7 +427,7 @@ class CommandClone(Command):
         return gist_infos[:max_gists]
 
     def _get_next_clone_count(self, gistrepo_top_dir: Path) -> int:
-        """次に使う clone 回数ディレクトリ名を返す。"""
+        """次に使うクローンIDを返す。"""
         return self._get_next_numeric_dir_value(gistrepo_top_dir)
 
     def _get_next_numeric_dir_value(self, top_dir: Path) -> int:
@@ -459,12 +447,16 @@ class CommandClone(Command):
                 values.append(int(child.name))
         return values
 
+    def _build_clone_dir_name(self, gist_id: str) -> str:
+        """gist ID から clone 先ディレクトリ名を生成する。"""
+        sanitized = WINDOWS_INVALID_DIR_CHARS_PATTERN.sub("_", gist_id)
+        return sanitized.strip() or "_"
+
     def _clone_gists(self, gist_infos: list[GistInfo], clone_dir: Path) -> tuple[int, int]:
         """指定された gist 群を clone し、成功件数と失敗件数を返す。
 
         既に clone 先ディレクトリが存在する gist は失敗として数える。
         """
-        used_names: set[str] = set()
         success_count = 0
         failure_count = 0
 
@@ -472,7 +464,7 @@ class CommandClone(Command):
             visibility_dir = self.REPO_KIND_PUBLIC if gist_info.public else self.REPO_KIND_PRIVATE
             dest_dir = clone_dir / visibility_dir
             dest_dir.mkdir(parents=True, exist_ok=True)
-            dir_name = self._make_unique_dir_name(Util.sanitize_dir_name(gist_info.name), used_names)
+            dir_name = self._build_clone_dir_name(gist_info.gist_id)
             gist_info.add_dir_name(dir_name)
             target_dir = dest_dir / dir_name
 
@@ -481,7 +473,7 @@ class CommandClone(Command):
                 Loggerx.error(f"Clone target already exists: {target_dir}", __name__)
                 continue
 
-            Loggerx.info(f"Cloning gist {gist_info.gist_id} to {str(target_dir)}", __name__)
+            Loggerx.debug(f"Cloning gist {gist_info.gist_id} to {str(target_dir)}", __name__)
             result = subprocess.run(
                 ["gh", "gist", "clone", gist_info.gist_id, str(target_dir)],
                 check=False,
@@ -501,17 +493,17 @@ class CommandClone(Command):
 
         return success_count, failure_count
 
-    def _write_fetch_yaml(
+    def _write_workspaces_yaml(
         self,
-        fetch_path: Path,
+        workspaces_yaml_path: Path,
         list_count: int,
         timestamp: str,
         clone_target_count: int,
     ) -> None:
-        """`fetch.yaml` に一覧取得回数ごとの取得時刻と対象件数を記録する。"""
-        fetch_assoc = self._load_yaml_file(fetch_path)
-        fetch_assoc[str(list_count)] = [timestamp, clone_target_count]
-        self._save_yaml_file(fetch_path, fetch_assoc)
+        """`workspaces.yaml` に一覧取得ごとのワークスペースID、取得時刻、対象件数を記録する。"""
+        workspaces_assoc = self._load_yaml_file(workspaces_yaml_path)
+        workspaces_assoc[str(list_count)] = [timestamp, clone_target_count]
+        self._save_yaml_file(workspaces_yaml_path, workspaces_assoc)
 
     def _write_progress_yaml(
         self,
@@ -519,7 +511,7 @@ class CommandClone(Command):
         clone_count: int,
         summary: dict[str, object],
     ) -> None:
-        """`progress.yaml` に clone 回ごとの実行結果要約を記録する。"""
+        """`progress.yaml` にクローンIDごとの実行結果要約を記録する。"""
         progress_assoc = self._load_yaml_file(progress_path)
         progress_assoc[str(clone_count)] = summary
         self._save_yaml_file(progress_path, progress_assoc)
